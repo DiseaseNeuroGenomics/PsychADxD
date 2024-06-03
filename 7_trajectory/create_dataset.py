@@ -156,8 +156,8 @@ class CreateData:
 
 def create_datasets(source_paths: List[str], target_path: str) -> None:
 
-	c = CreateData(source_paths, target_path)
-    	c.create_datasets()
+    c = CreateData(source_paths, target_path)
+    c.create_datasets()
 
 
 
