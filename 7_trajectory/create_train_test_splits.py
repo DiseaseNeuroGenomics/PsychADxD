@@ -27,33 +27,7 @@ class Splits:
 
         # we will only include RUSH/MMS subjects in the train set
         subjects = np.unique(self.meta["obs"]["SubID"][self.cell_idx])
-        braak = []
-        dementia = []
-        for s in subjects:
-            idx = np.where(np.array(self.meta["obs"]["SubID"]) == s)[0]
-            braak.append(self.meta["obs"]["BRAAK_AD"][idx][0])
-            dementia.append(self.meta["obs"]["Dementia"][idx][0])
-
-
-        progress = False
-        while not progress:
-
-            idx_rand = np.random.permutation(len(subjects))
-            subjects = subjects[idx_rand]
-            braak = np.array(braak)[idx_rand]
-            dementia = np.array(dementia)[idx_rand]
-
-            braak_splits = np.array_split(braak, self.n_splits)
-            dementia_splits = np.array_split(dementia, self.n_splits)
-
-            counts = []
-            for n in range(10):
-                idx = np.where((braak_splits[n] == 6) * (dementia_splits[n] == 0))[0]
-                print(n, len(idx), len(braak_splits[n]))
-                counts.append(len(idx))
-
-            if np.max(np.array(counts)) <= 1:
-                progress = True
+        subjects = np.random.permutation(subjects)
 
         test_subject_splits = np.array_split(subjects, self.n_splits)
         for n in range(self.n_splits):
