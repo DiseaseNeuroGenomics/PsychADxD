@@ -1,5 +1,7 @@
 # 7_trajectory: analysis on disease trajectory  
 
+Note: we borrowed heavility from modified from https://github.com/tabdelaal/scVI/blob/master/scvi/models/  
+
 ### Step 1 - Create the dataset used for model training and analysis  
 from create_dataset import create_dataset  
 create_dataset(source_paths, target_path)  
