@@ -8,16 +8,16 @@ cell_properties = {
 batch_properties = None
 
 dataset_cfg = {
-    "data_path": "/home/masse/work/data/mssm_rush_v2/data1.dat",
-    "metadata_path": "/home/masse/work/data/mssm_rush_v2/metadata.pkl",
+    "data_path": None, # ADD PATH HERE
+    "metadata_path": None, # ADD PATH HERE
     "cell_properties": cell_properties,
     "batch_size": 512,
-    "num_workers": 14,
+    "num_workers": 10,
     "batch_properties": batch_properties,
     "remove_sex_chrom": True,
-    "protein_coding_only": True,
+    "protein_coding_only": False,
     "top_k_genes": 25_000,
-    "cell_restrictions": {"class": "Astro"},
+    "cell_restrictions": {"class": "Immune"},
     "mixup": False,
     "group_balancing": "bd",
 }
@@ -50,8 +50,10 @@ task_cfg = {
 }
 
 trainer_cfg = {
+    "splits_path": None, # ADD PATH HERE
     "n_devices": 1,
     "grad_clip_value": 0.25,
     "accumulate_grad_batches": 1,
     "precision": "bf16-mixed",
+    "max_epochs": 10,
 }
