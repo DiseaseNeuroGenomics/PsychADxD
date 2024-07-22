@@ -12,16 +12,16 @@ from sklearn.decomposition import PCA
 class ModelResults:
 
     def __init__(
-            self,
-            data_fn: str,
-            meta_fn: str,
-            gene_pathway_fn: Optional[str] = None,  # dict of GO BP pathways
-            gene_count_prior: Optional[float] = None,
-            include_analysis_only: bool = True,
-            load_gene_count: bool = False,
-            normalize_gene_counts: bool = False,
-            log_gene_counts: bool = False,
-            add_gene_scores: bool = False,
+        self,
+        data_fn: str,
+        meta_fn: str,
+        gene_pathway_fn: Optional[str] = None,  # dict of GO BP pathways
+        gene_count_prior: Optional[float] = None,
+        include_analysis_only: bool = True,
+        load_gene_count: bool = False,
+        normalize_gene_counts: bool = False,
+        log_gene_counts: bool = False,
+        add_gene_scores: bool = False,
     ):
 
         self.data_fn = data_fn
@@ -93,7 +93,6 @@ class ModelResults:
         k = self.obs_list[0]
         n = z[k].shape[0]
         latent = np.zeros((n, 1), dtype=np.uint8)  # dummy variable to create AnnData
-        # mask = np.reshape(z["cell_mask"], (-1, z["cell_mask"].shape[-1]))
         a = ad.AnnData(latent)
 
         for m, k in enumerate(self.obs_list):
@@ -382,47 +381,4 @@ class ModelResults:
             adata.uns[f"donor_pca_noise_var"][m] = pca.noise_variance_
 
         return adata
-
-
-class GeneSignature:
-
-    # currently unused
-
-    def __init__(self, gene_signatures: dict, data_fn: str, meta_fn: str):
-        self.gene_signatures = gene_signatures
-        meta = pickle.load(open(meta_fn, "rb"))
-        self.gene_names = meta["var"]["gene_name"]
-        self.n_genes = len(self.gene_names)
-        del meta
-        self.data_fn = data_fn
-
-        genes = []
-        for v in self.gene_signatures.values():
-            genes += v
-        self.genes = np.unique(genes)
-        self.gene_idx = []
-        for g in self.genes:
-            j = np.where(np.array(self.gene_names) == g)[0][0]
-            self.gene_idx.append(j)
-        self.gene_idx = np.array(self.gene_idx)
-
-    def create_adata(self, adata):
-
-        n_genes_signature = len(self.gene_idx)
-        n = adata.shape[0]
-        adata_new = ad.AnnData(np.zeros((n, n_genes_signature), dtype=np.float32))
-        adata_new.var["gene_name"] = list(self.genes)
-        adata_new.var.index = adata_new.var["gene_name"]
-        adata_new.obs = adata.obs.copy()
-        adata_new.uns = adata.uns.copy()
-        del adata
-
-        for n, i in enumerate(adata_new.obs["cell_idx"]):
-            data = np.memmap(
-                self.data_fn, dtype='uint8', mode='r', shape=(self.n_genes,), offset=i * self.n_genes,
-            ).astype(np.float32)
-            adata_new.X[n, :] = data[self.gene_idx]
-
-        return adata_new
-
 
