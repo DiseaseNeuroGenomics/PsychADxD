@@ -18,7 +18,7 @@ from distributions import (
     NegativeBinomial,
     Poisson,
 )
-from losses import GroupDRO
+
 import scipy.stats as stats
 
 def sigmoid(x):
@@ -131,7 +131,7 @@ class LitVAE(pl.LightningModule):
             self.log("recon_loss", recon_loss.mean(), on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
             self.log("kl_z", kl_z.mean(), on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         else:
-            self.log("recon_loss_val", recon_loss.mean(), on_step = False, on_epoch = True, prog_bar = False, sync_dist = True)
+            self.log("recon_loss_val", recon_loss.mean(), on_step = False, on_epoch=True, prog_bar=False, sync_dist=True)
             self.log("kl_z_val", kl_z.mean(), on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
 
         return loss, kl_z
@@ -193,7 +193,7 @@ class LitVAE(pl.LightningModule):
             "networks.py",
             "task.py",
             "train.py",
-            "losses.py",
+            "distributions.py",
         ]
         for src in src_files:
             shutil.copyfile(src, f"{target_dir}/{os.path.basename(src)}")
@@ -304,9 +304,7 @@ class LitVAE(pl.LightningModule):
         qz_m, qz_v, z = self.network.z_encoder(gene_vals, batch_labels, batch_mask)
 
         # same as above, but for library size
-        #ql_m, ql_v, library = self.network.l_encoder(gene_vals, batch_labels, batch_mask)
         library_size_per_cell = torch.log(gene_vals.sum(dim=1, keepdim=True))
-
 
         px_scale, px_r, px_rate, px_dropout = self.network.decoder(
             self.dispersion, z, library_size_per_cell, batch_labels, batch_mask,
