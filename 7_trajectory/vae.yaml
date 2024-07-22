@@ -1,0 +1,14 @@
+name: vae
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - pip
+  - pytorch::pytorch-cuda=12.1
+  - pytorch::pytorch=2.3
+  - pytorch::torchvision
+  - pytorch::torchaudio
+  - conda-forge::pytorch-lightning=2.2.2
+
