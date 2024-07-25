@@ -60,8 +60,7 @@ For more information about the installation, demo workflow, and use cases of Dre
 Supplementary data and tables are available at [https://doi.org/10.7303/syn60084804](https://doi.org/10.7303/syn60084804)
 
 # Citation
-Single-cell atlas of transcriptomic vulnerability across multiple neuropsychiatric and neurodegenerative diseases
-Donghoon Lee, ..., Panos Roussos
+Lee et. al., Single-cell atlas of transcriptomic vulnerability across multiple neurodegenerative and neuropsychiatric diseases
 
 # License
 MIT License
