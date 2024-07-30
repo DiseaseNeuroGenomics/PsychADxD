@@ -63,7 +63,7 @@ npc = min(data.uns["pca_ncomps"], args.n_pcs)
 print('Using %i components for PCA' % npc)
 pg.regress_out(data, attrs=['n_counts','percent_mito','cycle_diff'])
 pg.run_harmony(data, batch=args.batch, rep='pca_regressed', max_iter_harmony=20, n_comps=npc)
-pg.neighbors(data, rep='pca_regressed_harmony', use_cache=False, dist='cosine', K=100, n_comps=npc)
+pg.neighbors(data, rep='pca_regressed_harmony', use_cache=False, K=100, n_comps=npc)
 pg.leiden(data, rep='pca_regressed_harmony', resolution=args.res, class_label=class_label)
 pg.umap(data, rep='pca_regressed_harmony', n_neighbors=args.n_neighbors, rep_ncomps=npc)
 if args.tsne:
