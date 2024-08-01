@@ -24,6 +24,19 @@ Modify cell_restrictions to change which cell class to train.
 ### Step 4 - Train model and run inference  
 python train.py  
 Model will be trained on all train/test splits. Model inference (e.g. predicted Braak and dementia scores, cell index) will be saved in lightning_logs/version_X/test_results_epX.pkl after each epoch.  
+  
+### Step 5 - Create AnnData structure with model predictions
+In the example below, we will create the AnnData structure by averaging predictions created after the 4th and 5th epoch (keep in mind 0-indexing in Python). The model predictions are usually saved in the lightning_logs directory, where the results of each split number are saved in the subdirectory version_XX. We will normalize gene counts and apply the log1p transform.  
+
+import process_data  
+mr = process_data.ModelResults(  
+    data_fn=[Gene data filename, .dat],
+    meta_fn = [Metadata data filename, .pkl],
+    include_analysis_only=True,
+    normalize_gene_counts=True,
+    log_gene_counts=True,
+    add_gene_scores=True,
+)
 
 
 
