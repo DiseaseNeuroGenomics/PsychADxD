@@ -26,7 +26,8 @@ Add path names for gene data (.dat file), metadata (.pkl file) and train/test sp
 Modify cell_restrictions to change which cell class to train.
 
 ### Step 4 - Train model and run inference  
-```python train.py  
+```
+python train.py  
 ```
 Model will be trained on all train/test splits. Model inference (e.g. predicted Braak and dementia scores, cell index) will be saved in lightning_logs/version_X/test_results_epX.pkl after each epoch.  
   
