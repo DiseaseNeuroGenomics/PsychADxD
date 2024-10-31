@@ -54,10 +54,7 @@ variancePartition v1.31.15
 zellkonverter v1.10.1
 zenith v1.2.0
 ```
-For more information about the installation, demo workflow, and use cases of Dreamlet, please visit https://diseaseneurogenomics.github.io/dreamlet/ for more information.
-
-# Dataset
-Supplementary data and tables are available at [https://doi.org/10.7303/syn60084804](https://doi.org/10.7303/syn60084804)
+For more information about the installation, demo workflow, and use cases of Dreamlet, please visit https://diseaseneurogenomics.github.io/dreamlet/.
 
 # Citation
 Lee et. al., Single-cell atlas of transcriptomic vulnerability across multiple neurodegenerative and neuropsychiatric diseases
