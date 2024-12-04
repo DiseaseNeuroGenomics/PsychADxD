@@ -54,10 +54,11 @@ variancePartition v1.31.15
 zellkonverter v1.10.1
 zenith v1.2.0
 ```
-For more information about the installation, demo workflow, and use cases of Dreamlet, please visit https://diseaseneurogenomics.github.io/dreamlet/.
+- For more information about the installation, demo workflow, and use cases of Dreamlet, please visit https://diseaseneurogenomics.github.io/dreamlet/.
+- For more information about the installation, demo workflow, and use cases of Crumblr, please visit https://diseaseneurogenomics.github.io/crumblr/.
 
 # Citation
-Lee et. al., Single-cell atlas of transcriptomic vulnerability across multiple neurodegenerative and neuropsychiatric diseases
+Donghoon Lee, Mikaela Koutrouli, Nicolas Y. Masse, Gabriel E. Hoffman, Seon Kinrot, Xinyi Wang, Prashant N.M., Milos Pjanic, Tereza Clarence, Fotios Tsetsos, Deepika Mathur, David Burstein, Karen Therrien, Aram Hong, Clara Casey, Zhiping Shao, Marcela Alvia, Stathis Argyriou, Jennifer Monteiro Fortes, Pavel Katsel, Pavan K. Auluck, Lisa L. Barnes, Stefano Marenco, David A. Bennett, PsychAD Consortium, Lars Juhl Jensen, Kiran Girdhar, Georgios Voloudakis, Vahram Haroutunian, Jaroslav Bendl, John F. Fullard, Panos Roussos. Single-cell atlas of transcriptomic vulnerability across multiple neurodegenerative and neuropsychiatric diseases. medRxiv, 2024. doi: https://doi.org/10.1101/2024.10.31.24316513
 
 # License
 MIT License
