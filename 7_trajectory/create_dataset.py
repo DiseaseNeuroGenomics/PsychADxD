@@ -128,7 +128,7 @@ class CreateData:
         chunk_size = 10_000  # chunk size for loading data into memory
         fp = np.memmap(data_fn, dtype='uint8', mode='w+', shape=(n_cells, n_genes))
 
-        for n in range(int(n_cells / chunk_size)):
+        for n in range(np.ceil(n_cells / chunk_size)):
             m = np.minimum(n_cells, (n + 1) * chunk_size)
             current_idx = self.cell_idx[n * chunk_size: m]
             print(f"Creating dataset, cell number = {current_idx[0]}")
