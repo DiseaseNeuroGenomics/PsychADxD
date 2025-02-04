@@ -50,7 +50,7 @@ args = parser.parse_args()
 
 class_label='leiden_labels_res'+str(int(args.res*10))
 
-### pass X #####################################################################
+### first pass #################################################################
 
 ### load data
 data = pg.read_input(args.input)
