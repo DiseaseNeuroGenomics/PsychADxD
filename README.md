@@ -10,7 +10,8 @@ PsychADxD
 ├──4_cross-disorder_composition: analysis on compositional variation across multiple disorders
 ├──5_cross-disorder_expression: analysis on gene expression variation across multiple disorders
 ├──6_AD-pathology: analysis on compositional & gene expression variation along AD pathology
-└──7_trajectory: analysis on disease trajectory
+├──7_trajectory: analysis on disease trajectory
+└──8_genetic: analysis on genetic heritability
 ```
 
 # System requirements
