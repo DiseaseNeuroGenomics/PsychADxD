@@ -19,15 +19,15 @@ Example Usage
 PsychAD_pegasus_end2end_2_hvf.py --input <Input h5ad file> --output <Output h5ad file> --flavor cell_ranger --n_top_genes 6000 --batch_key poolID
 ```
 
-### Step 3 - Preprocessing
-First pass clustering analysis using pegasus.
+### Step 3 - First pass clustering
+First pass clustering analysis using pegasus. This step is required to prepare for the doublet removal step.
 
 Example Usage
 ```
 python PsychAD_pegasus_end2end_3_pass.py --input <Input h5ad file> --output <Output h5ad file> --n_pcs 50 --batch poolID --res 1.2 --n_neighbors 15 --tsne False
 ```
 
-### Step 4 - Preprocessing
+### Step 4 - Doublet removal
 Removal of doublets using scrublet.
 
 Example Usage
