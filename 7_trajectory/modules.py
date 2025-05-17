@@ -12,37 +12,9 @@ def reparameterize_gaussian(mu, var):
     return Normal(mu, var.sqrt()).rsample()
 
 
-def identity(x):
-    return x
-
-def one_hot(index, n_cat):
-    onehot = torch.zeros(index.size(0), n_cat, device=index.device)
-    onehot.scatter_(1, index.type(torch.long), 1)
-    return onehot.type(torch.float32)
-
-
-
-class LinearWithMask(nn.Module):
-
-    def __init__(self, n_input: int, n_output: int, mask:torch.Tensor):
-        super().__init__()
-        # self.ff = nn.Linear(n_input, n_output)
-        self.W = nn.parameter.Parameter(
-            data=torch.randn(n_input, n_output),
-            requires_grad=True,
-        )
-        self.b = nn.parameter.Parameter(
-            data=torch.zeros((1, n_output), dtype=torch.float32),
-            requires_grad=True,
-        )
-        self.mask = mask
-
-    def forward(self, x):
-        W = self.W * self.mask.to(x.device)
-        return x @ W + self.b
-
 
 class ResidualLayer(nn.Module):
+    """Not currently used"""
 
     def __init__(
         self,
@@ -100,9 +72,14 @@ class FCLayers(nn.Module):
 
         self.fc_layers = nn.Sequential(*layers)
 
-    def forward(self, x: torch.Tensor, batch_vals: torch.Tensor, batch_mask: torch.Tensor):
+    def forward(
+        self,
+        x: torch.Tensor,
+        batch_vals: Optional[torch.Tensor] = None,
+        batch_mask: Optional[torch.Tensor] = None,
+    ):
 
-        if np.sum(self.batch_dims) > 0:
+        if batch_vals is not None and batch_mask is not None:
             batch_vals[batch_vals < 0] = 0
             batch_vars = []
             for n in range(len(self.batch_dims)):
@@ -115,36 +92,6 @@ class FCLayers(nn.Module):
         return self.fc_layers(x)
 
 
-class ChromDropout(nn.Module):
-    # currently not used
-
-    def __init__(self, p: float, gene_chrom_dict: Dict, n_input: int):
-        super().__init__()
-        print("Initializing chromosome dropout")
-        self.gene_chrom_dict = {}
-        for n, (k, v) in enumerate(gene_chrom_dict.items()):
-            y = torch.ones(n_input, dtype=torch.float32)
-            y[v] = 0.0
-            self.gene_chrom_dict[torch.tensor(n)] = y.to("cuda")
-
-        self.num_chroms = len(self.gene_chrom_dict.keys())
-        self.N = int(p * self.num_chroms)
-        self.ratio = self.N / self.num_chroms
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        if not self.training or self.N < 1e-6:
-            return input
-        else:
-            for n in range(input.size(0)):
-                idx = torch.randperm(self.num_chroms)[:self.N]
-                for i in idx:
-                    k = list(self.gene_chrom_dict.keys())[i]
-                    input[n, :] = input[n, :] * self.gene_chrom_dict[k]
-
-            return input / self.ratio
-
-
-# Encoder
 class Encoder(nn.Module):
 
     def __init__(
@@ -157,14 +104,15 @@ class Encoder(nn.Module):
         dropout_rate: float = 0.0,
         input_dropout_rate: float = 0.0,
         gene_chrom_dict: Optional[Dict] = None,
-        chromosome_dropout: bool = False, # currently not used
-        standard_dropout: bool = True,
+        log_normalize: bool = True,
         distribution: str = "normal",
         shared_variance: bool = True,
     ):
         super().__init__()
 
         self.distribution = distribution
+        self.log_normalize = log_normalize
+
         self.encoder = FCLayers(
             n_in=n_input,
             n_layers=n_layers,
@@ -177,19 +125,13 @@ class Encoder(nn.Module):
         self.gene_chrom_dict = gene_chrom_dict
         self.softplus = nn.Softplus()
 
-        if chromosome_dropout:
-            self.drop_chrom = ChromDropout(float(input_dropout_rate), gene_chrom_dict, n_input)
-        else:
-            self.drop_chrom = nn.Identity()
-        if standard_dropout:
-            self.drop_standard = nn.Dropout(p=float(input_dropout_rate))
-        else:
-            self.drop_standard = nn.Identity()
+        self.drop = nn.Dropout(p=float(input_dropout_rate)) if input_dropout_rate > 0  else nn.Identity()
+
     def forward(self, input: torch.Tensor, batch_labels: torch.Tensor, batch_mask: torch.Tensor):
 
-        x = torch.log(1.0 + input)
-        x = self.drop_chrom(x)
-        x = self.drop_standard(x)
+        if self.log_normalize:
+            x = torch.log(1.0 + input)
+        x = self.drop(x)
 
         # Parameters for latent distribution
         q = self.encoder(x, batch_labels, batch_mask)
@@ -246,10 +188,15 @@ class CellDecoder(nn.Module):
                 self.cell_mlp[k] = nn.Linear(self.latent_dim, n_targets, bias=True)
 
 
-    def forward(self, latent: torch.Tensor, batch_vals: torch.Tensor, batch_mask: torch.Tensor):
+    def forward(
+        self,
+        latent: torch.Tensor,
+        batch_vals: Optional[torch.Tensor] = None,
+        batch_mask: Optional[torch.Tensor] = None,
+    ):
 
         # Predict cell properties
-        if np.sum(self.batch_dims) > 0:
+        if batch_vals is not None and batch_mask is not None:
             batch_vals[batch_vals < 0] = 0
             batch_vars = []
             for n in range(len(self.batch_dims)):
@@ -261,7 +208,7 @@ class CellDecoder(nn.Module):
 
         output = {}
         for n, (k, cell_prop) in enumerate(self.cell_properties.items()):
-            if k in self.grad_reverse_dict.keys():
+            if self.grad_reverse_dict is not None and k in self.grad_reverse_dict.keys():
                 x = self.grad_reverse[k](latent)
             else:
                 x = latent.detach() if cell_prop["stop_grad"] else latent
