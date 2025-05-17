@@ -148,6 +148,7 @@ class SingleCellDataset(Dataset):
 
         n_groups = len(self.group_idx)
         self.cell_per_group = self.batch_size // n_groups
+
     def _gene_stats(self):
 
         N = 100_000 # maximum number of cells to sample
@@ -192,6 +193,10 @@ class SingleCellDataset(Dataset):
 
         cond = self.metadata["var"]['percent_cells'] >= 0.0
 
+        if self.protein_coding_only:
+            cond *= self.metadata["var"]['protein_coding']
+            self.metadata["var"]['percent_cells'][~cond] = 0.0
+
         if self.remove_sex_chrom:
             cond *= self.metadata["var"]['gene_chrom'] != "X"
             cond *= self.metadata["var"]['gene_chrom'] != "Y"
@@ -199,21 +204,10 @@ class SingleCellDataset(Dataset):
 
         if self.top_k_genes is not None:
             th = np.sort(self.metadata["var"]['percent_cells'])[-self.top_k_genes]
-            cond *= self.metadata["var"]['percent_cells'] > th
+            cond *= self.metadata["var"]['percent_cells'] >= th
             print(f"Top {self.top_k_genes} genes selected; threshold = {th:1.4f}")
 
-        if self.protein_coding_only:
-            cond *= self.metadata["var"]['protein_coding']
-
         self.gene_idx = np.where(cond)[0]
-
-        # create a dict of gene indices for each chromosome number
-        # experimenting with using this for dropout
-        gene_chroms = self.metadata["var"]['gene_chrom'][self.gene_idx]
-        self.gene_chrom_dict = {}
-        for c in np.unique(gene_chroms):
-            idx = np.where(gene_chroms == c)[0]
-            self.gene_chrom_dict[c] = idx
 
         self.n_genes = len(self.gene_idx)
         self.gene_names = self.metadata["var"]["gene_name"][self.gene_idx]  # needed for pathway networks
