@@ -11,12 +11,12 @@ dataset_cfg = {
     "data_path": None, # ADD PATH HERE
     "metadata_path": None, # ADD PATH HERE
     "cell_properties": cell_properties,
-    "batch_size": 512,
+    "batch_size": 256,
     "num_workers": 10,
     "batch_properties": batch_properties,
     "remove_sex_chrom": True,
-    "protein_coding_only": False,
-    "top_k_genes": 25_000,
+    "protein_coding_only": True,
+    "top_k_genes": 10_000,
     "cell_restrictions": {"class": "Immune"},
     "mixup": False,
     "group_balancing": "bd",
@@ -25,13 +25,8 @@ dataset_cfg = {
 model_cfg = {
     "n_layers": 2,
     "n_hidden": 512,
-    "n_hidden_decoder": 512,
-    "n_latent": 32,
-    "n_latent_cell_decoder": 32,
     "dropout_rate": 0.5,
-    "input_dropout_rate": 0.25,
-    "chromosome_dropout": False,
-    "standard_dropout": True,
+    "input_dropout_rate": 0.0,
     "grad_reverse_dict": {
         "SubID": 0., "Age": 0., "Sex": 0., "Brain_bank": 0., "PMI": 0.,
     },
@@ -39,21 +34,21 @@ model_cfg = {
 }
 
 task_cfg = {
-    "learning_rate": 2e-4,
+    "learning_rate": 2e-2,
+    "momentum": 0.0,
     "warmup_steps": 2000.0,
-    "weight_decay": 0.05,
-    "l1_lambda": 0.0,
-    "gene_loss_coeff": 1e-3,
+    "weight_decay": 0.0,
     "balance_classes": False,
-    "n_epochs_kl_warmup": None,
+    "label_smoothing": 0.0,
     "batch_properties": batch_properties,
+    "perturb_gene_names": None,
 }
 
 trainer_cfg = {
     "splits_path": None, # ADD PATH HERE
     "n_devices": 1,
-    "grad_clip_value": 0.25,
+    "grad_clip_value": 0.5,
     "accumulate_grad_batches": 1,
-    "precision": "bf16-mixed",
-    "max_epochs": 10,
+    "precision": "32-true",
+    "max_epochs": 20,
 }
