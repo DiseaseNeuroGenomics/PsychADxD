@@ -76,16 +76,50 @@ class CellPrediction(pl.LightningModule):
             shutil.copyfile(src, f"{target_dir}/{os.path.basename(src)}")
         self.source_code_copied = True
 
-    def _get_perturb_gene_index(self, perturb_gene_names):
+    def _get_perturb_gene_index(
+        self,
+        perturb_gene_names: Optional[Dict[str, List]] = None,
+        add_random_set: bool = True,
+        n_random_sets: int = 30,
+    ):
+        """Used to infer how gene perturbations affect model predictions, not used in Capstone"""
 
-        """Used to infer how gene perturbations affect model predictions"""
-        self.perturb_gene_names = []
-        self.perturb_gene_idx = []
-        for g in perturb_gene_names:
-            if g in self.gene_names:
-                j = np.where(np.array(self.gene_names) == g)[0][0]
-                self.perturb_gene_names.append(g)
-                self.perturb_gene_idx.append(j)
+        if perturb_gene_names is not None:
+
+            self.perturb_gene_names = {}
+            self.perturb_gene_idx = {}
+
+            genes_for_random_set = set(self.gene_names)
+            gene_set_sizes = []
+
+            if perturb_gene_names is not None:
+                for k, genes in perturb_gene_names.items():
+                    self.perturb_gene_names[k] = []
+                    self.perturb_gene_idx[k] = []
+                    gene_set_sizes.append(0)
+                    for g in genes:
+                        if not g in self.gene_names:
+                            continue
+                        genes_for_random_set = genes_for_random_set - set([g])
+                        j = np.where(np.array(self.gene_names) == g)[0][0]
+                        self.perturb_gene_names[k].append(g)
+                        self.perturb_gene_idx[k].append(j)
+                        gene_set_sizes[-1] += 1
+
+                if add_random_set:
+                    for n in range(n_random_sets):
+                        gene_size = np.random.choice(gene_set_sizes)
+                        genes = np.random.choice(list(genes_for_random_set), size=(gene_size,), replace=False)
+                        k = f"Random{n}"
+                        self.perturb_gene_names[k] = []
+                        self.perturb_gene_idx[k] = []
+                        for g in genes:
+                            j = np.where(np.array(self.gene_names) == g)[0][0]
+                            self.perturb_gene_names[k].append(g)
+                            self.perturb_gene_idx[k].append(j)
+
+        else:
+            self.perturb_gene_names = None
 
 
     def _reset_results_dict(self):
@@ -98,13 +132,16 @@ class CellPrediction(pl.LightningModule):
         for k in self.cell_properties.keys():
             self.results[k] = []
             self.results[f"pred_{k}"] = []
-        if len(self.perturb_gene_names) > 0:
-            self.results["perturb_gene_names"] = self.perturb_gene_names
-            for k in self.cell_properties.keys():
-                self.results[f"pred_perturb_up_{k}"] = []
-                self.results[f"pred_perturb_down_{k}"] = []
         self.results["cell_idx"] = []
         self.results["cell_mask"] = []
+
+        if self.perturb_gene_names is not None:
+            for p in self.perturb_gene_names.keys():
+                self.results[f"perturb_genes_{p}"] = self.perturb_gene_names[p]
+                self.results[f"pred_perturb_{p}"] = {}
+                for k in self.cell_properties.keys():
+                    self.results[f"pred_perturb_{p}"][f"{k}_up"] = []
+                    self.results[f"pred_perturb_{p}"][f"{k}_down"] = []
 
 
     def _cell_properties_metrics(self):
@@ -162,30 +199,31 @@ class CellPrediction(pl.LightningModule):
 
         gene_vals, cell_targets, cell_mask, batch_labels, batch_mask, cell_idx, _, _ = batch
 
-        gene_vals_perturb_up = gene_vals.detach().clone()
-        gene_vals_perturb_down = gene_vals.detach().clone()
-        for i in self.perturb_gene_idx:
-            gene_vals_perturb_up[:, i] = gene_vals_perturb_up[:, i] + 1
-            gene_vals_perturb_down[:, i] = 0.0
+        for p in self.perturb_gene_names.keys():
 
-        cell_perturb_up, _ = self.network(gene_vals_perturb_up, batch_labels, batch_mask)
-        cell_perturb_down, _ = self.network(gene_vals_perturb_down, batch_labels, batch_mask)
+            gene_vals_perturb_up = gene_vals.detach().clone()
+            gene_vals_perturb_down = gene_vals.detach().clone()
+            for i in self.perturb_gene_idx[p]:
+                gene_vals_perturb_up[:, i] = gene_vals_perturb_up[:, i] + 1
+                gene_vals_perturb_down[:, i] = 0.0
 
-        for n, (k, cell_prop) in enumerate(self.cell_properties.items()):
+            cell_perturb_up, _ = self.network(gene_vals_perturb_up, batch_labels, batch_mask)
+            cell_perturb_down, _ = self.network(gene_vals_perturb_down, batch_labels, batch_mask)
 
-            if cell_prop["discrete"]:
-                pred_prob_up = F.softmax(cell_perturb_up[k], dim=-1).to(torch.float32).detach().cpu().numpy()
-                pred_prob_down = F.softmax(cell_perturb_down[k], dim=-1).to(torch.float32).detach().cpu().numpy()
-                if k != "SubID":
-                    self.results["pred_perturb_up_" + k].append(pred_prob_up)
-                    self.results["pred_perturb_down_" + k].append(pred_prob_down)
-            else:
-                self.results[f"pred_perturb_up_{k}"].append(
-                    cell_perturb_up[k][:, 0].detach().cpu().to(torch.float32).numpy()
-                )
-                self.results[f"pred_perturb_down_{k}"].append(
-                    cell_perturb_up[k][:, 0].detach().cpu().to(torch.float32).numpy()
-                )
+            for n, (k, cell_prop) in enumerate(self.cell_properties.items()):
+
+                if k == "SubID":
+                    continue
+
+                if cell_prop["discrete"]:
+                    pred_up = F.softmax(cell_perturb_up[k], dim=-1).to(torch.float32).detach().cpu().numpy()
+                    pred_down = F.softmax(cell_perturb_down[k], dim=-1).to(torch.float32).detach().cpu().numpy()
+                else:
+                    pred_up = cell_perturb_up[k][:, 0].detach().cpu().to(torch.float32).numpy()
+                    pred_down = cell_perturb_down[k][:, 0].detach().cpu().to(torch.float32).numpy()
+
+                self.results[f"pred_perturb_{p}"][f"{k}_up"].append(pred_up)
+                self.results[f"pred_perturb_{p}"][f"{k}_down"].append(pred_down)
 
 
     def on_validation_epoch_end(self):
@@ -235,22 +273,21 @@ class CellPrediction(pl.LightningModule):
 
             if cell_prop["discrete"]:
                 pred_idx = torch.argmax(cell_pred[k], dim=-1).to(torch.int64)
-                pred_prob = F.softmax(cell_pred[k], dim=-1).to(torch.float32).detach().cpu().numpy()
-
                 targets = cell_targets[:, n].to(torch.int64)
                 self.cell_accuracy[k].update(pred_idx[idx][None, :], targets[idx][None, :])
 
             else:
                 pred = cell_pred[k][:, 0]
-                try:  # rare error
-                    self.cell_explained_var[k].update(pred[idx], cell_targets[idx, n])
-                except:
-                    self.cell_explained_var[k].update(pred, cell_targets[idx, n])
+                #try:  # rare error
+                self.cell_explained_var[k].update(pred[idx], cell_targets[idx, n])
+                #except:
+                #    self.cell_explained_var[k].update(pred, cell_targets[idx, n])
 
         for k, v in self.cell_accuracy.items():
             self.log(k, v, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         for k, v in self.cell_explained_var.items():
             self.log(k, v, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+
 
     def training_step(self, batch, batch_idx):
 
@@ -278,13 +315,10 @@ class CellPrediction(pl.LightningModule):
                 masked_loss = (loss * cell_mask[:, n]).mean()
                 cell_loss += masked_loss
 
-
             else:
-                alpha = 1 / self.cell_properties[k]["std"] ** 2
-                loss = alpha * self.cell_mse[k](torch.squeeze(cell_pred[k]), cell_prop_vals[:, n])
+                loss = self.cell_mse[k](torch.squeeze(cell_pred[k]), cell_prop_vals[:, n])
                 masked_loss = (loss * cell_mask[:, n]).mean()
                 cell_loss += masked_loss
-
 
             if self.training:
                 self.log(f"loss_{k}", masked_loss, on_step=False, on_epoch=True, prog_bar=False,
@@ -294,6 +328,7 @@ class CellPrediction(pl.LightningModule):
         self.log(loss_name, cell_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
         return cell_loss
+
 
     def configure_optimizers(self):
 
