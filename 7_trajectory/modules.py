@@ -127,10 +127,11 @@ class Encoder(nn.Module):
 
         self.drop = nn.Dropout(p=float(input_dropout_rate)) if input_dropout_rate > 0  else nn.Identity()
 
-    def forward(self, input: torch.Tensor, batch_labels: torch.Tensor, batch_mask: torch.Tensor):
+    def forward(self, x: torch.Tensor, batch_labels: torch.Tensor, batch_mask: torch.Tensor):
 
         if self.log_normalize:
-            x = torch.log(1.0 + input)
+            x = torch.log(1.0 + x)
+
         x = self.drop(x)
 
         # Parameters for latent distribution

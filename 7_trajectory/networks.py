@@ -109,13 +109,14 @@ class FeedforwardNetwork(nn.Module):
         log_normalize: bool = True,
         cell_decoder_hidden_layer: bool = False,
         layer_norm: bool = True,
-
+        normalize_total: bool = False,
         **kwargs,
     ):
         super().__init__()
 
         self.n_layers = n_layers
         self.log_normalize = log_normalize
+        self.normalize_total = normalize_total
 
         if n_layers > 0:
             self.encoder = FCLayers(
@@ -138,6 +139,9 @@ class FeedforwardNetwork(nn.Module):
 
 
     def forward(self, x: torch.Tensor, batch_labels: torch.Tensor, batch_mask: torch.Tensor):
+
+        if self.normalize_total:
+            x = 10_000 * x / x.sum(dim=1, keepdim=True)
 
         if self.log_normalize:
             x = torch.log(1.0 + x)
