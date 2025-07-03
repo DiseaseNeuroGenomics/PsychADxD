@@ -1,3 +1,6 @@
+import os
+import copy
+import pandas as pd
 import numpy as np
 import scanpy as sc
 
@@ -317,7 +320,7 @@ class CellTrajectories:
                 neighbors=None,
             )
 
-            self.cell_traj[name]["resilience"] = calculate_trajectory_residuals(
+            self.cell_traj[name]["resilience_traj"] = calculate_trajectory_residuals(
                 pred_braak,
                 pred_dementia,
                 donor_gene_means,
@@ -328,7 +331,7 @@ class CellTrajectories:
             if self.edge > 0:
                 self.cell_traj[name]["pred_braak_traj"] = self.cell_traj[name]["pred_braak_traj"][self.edge:-self.edge]
                 self.cell_traj[name]["gene_exp_traj"] = self.cell_traj[name]["gene_exp_traj"][self.edge:-self.edge, :]
-                self.cell_traj[name]["resilience"] = self.cell_traj[name]["resilience"][self.edge:-self.edge, :]
+                self.cell_traj[name]["resilience_traj"] = self.cell_traj[name]["resilience_traj"][self.edge:-self.edge, :]
 
             pca = PCA(n_components=n_components)
             self.cell_traj[name]["pca_gene_exp_traj"]  = pca.fit_transform(self.cell_traj[name]["gene_exp_traj"])
@@ -388,6 +391,57 @@ class CellTrajectories:
         if save_fig_fn is not None:
             plt.savefig(save_fig_fn)
         plt.show()
+
+    def output_slopes_for_zenith(self, zenith_save_path, suffix = ""):
+
+        for name in self.cell_names:
+            save_fn = os.path.join(zenith_save_path, f"{name}_zenith_input.csv")
+
+            slopes = {}
+            n_slopes = len(self.cell_traj[name][f"slopes_{suffix}"])
+            for n in range(n_slopes):
+                slopes[f"Braak{n}"] = self.cell_traj[name][f"slopes_{suffix}"][n, :]
+            for n in range(n_slopes):
+                slopes[f"Resilience{n}"] = self.cell_traj[name][f"resilience_{suffix}"][n, :]
+
+            genes = copy.deepcopy(list(self.gene_names))
+            for n, g in enumerate(genes):
+                if n == 0:
+                    continue
+                if g in genes[:n]:
+                    genes[n] = g + "-1"
+            output_zenith(slopes, save_fn, genes)
+
+    def calculate_slopes(
+        self,
+        time_pts_donors = None,
+        time_pts_pct = None,
+        suffix = "",
+    ):
+
+        # time_pts_donors = e.g. [[0, 60], [20, 80], [40, 100],...]
+        # time_pts_pct = e.g. [[0, 0.2], [0.2, 1.0]]
+
+        assert (time_pts_donors is None) ^ (time_pts_pct is None), "Either time_pts_donors or time_pts_pct must be defined "
+
+        for name in self.cell_names:
+
+            N = len(self.cell_traj[name]["pred_braak_traj"])
+            time_pts = []
+            if time_pts_pct is not None:
+                for t in time_pts_pct:
+                    time_pts.append([int(t[0] * N), int(t[1] * N)])
+            else:
+                for t in time_pts_pct:
+                    if t[1] <= N:
+                        time_pts.append([t[0], t[1]])
+
+            self.cell_traj[name][f"slopes_{suffix}"], self.cell_traj[name][f"resilience_{suffix}"], _ = calculate_slopes(
+                time_pts,
+                self.cell_traj[name]["pred_braak_traj"],
+                self.cell_traj[name]["gene_exp_traj"],
+                self.cell_traj[name]["resilience_traj"],
+            )
 
 
 class GlobalTrajectory:
@@ -544,6 +598,41 @@ class GlobalTrajectory:
             plt.savefig(save_fig_fn)
         plt.show()
 
+
+def output_zenith(slope_dict, save_fn, genes):
+    """Out a csv of genes with associtaed scores as input for Zenith gene enrichment"""
+
+    data = {"genes": []}
+    for k in slope_dict.keys():
+        data[k] = []
+
+    for i in range(len(genes)):
+        data["genes"].append(genes[i])
+        for k, v in slope_dict.items():
+            data[k].append(v[i])
+
+    df = pd.DataFrame(data=data)
+    df.to_csv(save_fn)
+
+def calculate_slopes(time_pts, pred_braak_traj, genes_braak_traj, res):
+
+    n_time, n_genes = genes_braak_traj.shape
+
+    m = len(time_pts)
+    slopes = np.zeros((m, n_genes))
+    resilience = np.zeros((m, n_genes))
+    explained_var = np.zeros((m, n_genes))
+
+    for i, break_point in enumerate(time_pts):
+        t0 = break_point[0]
+        t1 = break_point[1]
+        slopes[i, :], _, _, explained_var[i, :] = fit_single(
+            pred_braak_traj[t0:t1], genes_braak_traj[t0:t1, :]
+        )
+        resilience[i, :] = np.mean(res[t0:t1, :], axis=0)
+
+    return slopes, resilience, explained_var
+
 def calculate_trajectory_residuals(pred_x, pred_y, gene_vals, gamma, neighbors=None):
 
     """Used to determine whether genes are protective or damaging
@@ -622,7 +711,7 @@ def fit_piecewise_search(x, y, time_resolution=1, no_jump=False, max_time=None, 
     n = np.argmax(np.stack(ex_var))
     t = n * time_resolution + min_time
 
-    return t, np.stack(ex_var), np.stack(error), y_hat[n]
+    return t,ex_var[n], error[n], y_hat[n]
 
 def fit_single(x, y):
 
