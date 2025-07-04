@@ -8,6 +8,7 @@ import scipy.stats as stats
 import scipy.signal as signal
 import scipy.optimize as optimize
 from sklearn.decomposition import PCA
+from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -15,6 +16,9 @@ from matplotlib import cm
 import matplotlib.gridspec as gridspec
 import matplotlib
 matplotlib.rcParams['pdf.fonttype'] = 42
+import matplotlib.colors as mcolors
+from matplotlib.colors import Normalize
+import matplotlib.patches as patches
 
 import palantir
 from py_monocle import (
@@ -25,6 +29,7 @@ from py_monocle import (
     differential_expression_genes,
 )
 
+import pathway_utils
 
 def classification_score(x_pred, x_real):
     s0 = np.sum((x_real == 0) * (x_pred < 0.5)) / np.sum(x_real == 0)
@@ -310,10 +315,7 @@ class CellTrajectories:
 
             self.cell_traj[name] = {"pred_braak": pred_braak, "gene_exp": donor_gene_means}
 
-            (
-                self.cell_traj[name]["pred_braak_traj"],
-                self.cell_traj[name]["gene_exp_traj"]
-            ) = calculate_trajectories_single(
+            self.cell_traj[name]["pred_braak_traj"], self.cell_traj[name]["gene_exp_traj"] = calculate_trajectories_single(
                 pred_braak,
                 donor_gene_means,
                 gamma,
@@ -593,6 +595,220 @@ class GlobalTrajectory:
         ax[len(pcs)].spines['top'].set_visible(False)
         ax[len(pcs)].spines['right'].set_visible(False)
 
+        plt.tight_layout()
+        if save_fig_fn is not None:
+            plt.savefig(save_fig_fn)
+        plt.show()
+
+
+class PathEnrichmentAllCells:
+
+    def __init__(self, input_path, FDR_cutoff = 0.01, min_genes = 10, max_genes = 250):
+
+        self.FDR_cutoff = FDR_cutoff
+        self.min_genes = min_genes
+        self.max_genes = max_genes
+
+        self._get_input_files(input_path)
+        self._load_data()
+        self._filter_data()
+
+    def _get_input_files(self, input_path):
+
+        fns = os.listdir(input_path)
+        self.fns = [os.path.join(input_path, fn) for fn in fns if not "lock" in fn]
+
+    def _load_data(self):
+
+        dataframes = []
+        for fn in self.fns:
+            df = pd.read_csv(fn)
+            df["fn"] = os.path.split(fn)[-1]
+            go_ids = []
+            pathways = []
+            for g in df["Unnamed: 0"]:
+                g1 = f"GO:{g[2:9]}"
+                go_ids.append(g1)
+                p = g.split(":")[1][1:]
+                pathways.append(p)
+            df["go_id"] = go_ids
+            df["pathway"] = pathways
+            dataframes.append(df.copy())
+
+        self.df_full = pd.concat(dataframes, axis=0)
+        self.df_full = self.df_full.sort_values(["FDR"])
+        self.df_full = self.df_full.reset_index(None)
+
+    def _filter_data(self):
+
+        # save_fn can be used ot save results as csv for rrvgo analysis
+        data = {
+            "go_id": [],
+            "pathway": [],
+            "FDR": [],
+            "direction": [],
+            "delta": [],
+            "ngenes": [],
+            "FDR_resilience": [],
+        }
+        for g, p, f, d, dl, n, filename in zip(
+                self.df_full.go_id.values,
+                self.df_full["Unnamed: 0"].values,
+                self.df_full.FDR.values,
+                self.df_full.Direction.values,
+                self.df_full.delta.values,
+                self.df_full.NGenes.values,
+                self.df_full.fn.values
+        ):
+            if f > self.FDR_cutoff:
+                continue
+            if n < self.min_genes or n > self.max_genes:
+                continue
+
+            if g in data["go_id"]:
+                j = np.where(np.array(data["go_id"]) == g)[0][0]
+                if f < data["FDR"][j]:
+                    data["FDR"][j] = f
+                if f < data["FDR_resilience"][j] and "resilience" in filename.lower():
+                    data["FDR_resilience"][j] = f
+            else:
+                data["go_id"].append(g)
+                data["pathway"].append(p.split(":")[1][1:])
+                data["FDR"].append(f)
+                data["FDR_resilience"].append(f if "resilience" in filename.lower() else 1.0)
+                data["direction"].append(d)
+                data["delta"].append(dl)
+                data["ngenes"].append(n)
+
+        self.df_filtered = pd.DataFrame(data=data)
+        self.df_filtered = pathway_utils.remove_bad_terms( self.df_filtered)
+        self.df_filtered =  self.df_filtered.sort_values(["FDR"])
+        self.df_filtered =  self.df_filtered.reset_index(None)
+
+    def save_filtered_data(self, save_fn):
+        self.df_filtered.to_csv(save_fn)
+
+    def _generate_early_late_data(
+        self,
+        pathways,
+        cell_names = ["EN", "IN", "Astro", "Immune", "Oligo", "OPC", "Mural", "Endo"],
+    ):
+
+        df_full = self.df_full[self.df_full.pathway.isin(pathways)]
+
+        n_paths = len(pathways)
+        n_cells = len(cell_names)
+        self.fdr = np.zeros((n_paths, 2, 2, n_cells)) # [pathway, early/late, Braak/Resilience, Cell]
+        self.z_score = np.zeros((n_paths, 2, 2, n_cells))
+
+        for i, p in enumerate(pathways):
+            # df_row = df[df.pathway == p]
+            df_full_rows = df_full[df_full.pathway == p]
+            df_full_rows = df_full_rows.reset_index()
+            for n0, c in enumerate(cell_names):
+                for n1, s in enumerate(["braak", "resilience"]):
+                    for j in range(len(df_full_rows)):
+                        if s in df_full_rows.loc[j].fn.lower() and c in df_full_rows.loc[j].fn:
+                            m = 0 if "early" in df_full_rows.loc[j].fn.lower() else 1
+                            sign = -1 if "resilience" in df_full_rows.loc[j].fn.lower() else 1
+                            self.fdr[i, m, n1, n0] = - np.sign(df_full_rows.loc[j].delta) * np.log10(df_full_rows.loc[j].FDR)
+                            self.z_score[i, m, n1, n0] = sign * df_full_rows.loc[j].delta / df_full_rows.loc[j].se
+
+
+    def _generate_early_late_dataframes(
+        self,
+        pathways,
+        cell_names = ["EN", "IN", "Astro", "Immune", "Oligo", "OPC", "Mural", "Endo"],
+        cluster_pathways = False,
+    ):
+
+        n_paths = len(pathways)
+        new_pathways = []
+        for p in pathways:
+            new_pathways.append(pathway_utils.condense_pathways(p))
+
+        if cluster_pathways:
+            Z = linkage(np.reshape(self.z_score, (self.z_score.shape[0], -1)), method='ward')
+            s = dendrogram(Z, no_plot=True)
+            idx = [s["leaves"][i] for i in range(n_paths)]
+            new_pathways = [new_pathways[i] for i in idx]
+            self.z_score = self.z_score[idx]
+            self.fdr = self.fdr[idx]
+
+        self.df_fdr_early = pd.DataFrame(
+            data=np.reshape(self.fdr[:, 0], (n_paths, -1)), index=new_pathways, columns=2 * cell_names,
+        )
+        self.df_zscore_early = pd.DataFrame(
+            data=np.reshape(self.z_score[:, 0], (n_paths, -1)), index=new_pathways, columns=2 * cell_names,
+        )
+        self.df_fdr_late = pd.DataFrame(
+            data=np.reshape(self.fdr[:, 1], (n_paths, -1)), index=new_pathways, columns=2 * cell_names,
+        )
+        self.df_zscore_late = pd.DataFrame(
+            data=np.reshape(self.z_score[:, 1], (n_paths, -1)), index=new_pathways, columns=2 * cell_names,
+        )
+
+    def generate_early_late_figure(
+        self,
+        pathways,
+        cell_names = ["EN", "IN", "Astro", "Immune", "Oligo", "OPC", "Mural", "Endo"],
+        cluster_pathways = False,
+        figsize=(6.0, 6.0),
+        save_fig_fn = None,
+    ):
+
+        self._generate_early_late_data(pathways, cell_names)
+        self._generate_early_late_dataframes(pathways, cell_names, cluster_pathways=cluster_pathways)
+
+        # fig, ax = plt.subplots(figsize=(13, 12))
+
+        # fig, ax = plt.subplots(1, 1, figsize=(7, 4))
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+        m = 10
+
+        # Create colormap
+        cmap0 = cm.get_cmap('RdBu_r')  # replace with your preferred colormap
+        cmap1 = cm.get_cmap('PiYG')  # replace with your preferred colormap
+
+        norm = Normalize(vmin=-m, vmax=m)
+
+        n_paths = self.df_fdr_early.shape[0]
+        n_cells = self.df_fdr_early.shape[1]
+
+        # Iterate over each cell
+        for i in range(n_paths):
+            for j in range(n_cells):
+
+                cmap = cmap0 if j < 8 else cmap1
+                # Create polygon coordinates
+                polygon_coords = [(j, i), (j + 1, i), (j, i + 1), (j + 1, i + 1)]
+
+                # Create two polygons for each half of the cell
+                upper_triangle = patches.Polygon(polygon_coords[:3], closed=True, lw=0.2,
+                                                 facecolor=cmap(norm(self.df_zscore_early.iloc[i, j])))
+                lower_triangle = patches.Polygon(polygon_coords[1:], closed=True, lw=0.2,
+                                                 facecolor=cmap(norm(self.df_zscore_late.iloc[i, j])))
+                ax.add_patch(upper_triangle)
+                ax.add_patch(lower_triangle)
+
+                if np.abs(self.df_fdr_early.iloc[i, j]) > -np.log10(0.05):
+                    ax.text(j + 0.33, i + 0.4, "*", ha="center", va="center", color="w", fontsize=6)
+                if np.abs(self.df_fdr_late.iloc[i, j]) > -np.log10(0.05):
+                    ax.text(j + 0.66, i + 0.8, "*", ha="center", va="center", color="w", fontsize=6)
+
+        ax.set_xlim(0, n_cells)
+        ax.set_ylim(0, n_cells)
+        ax.set_xticks(np.arange(n_cells) + 0.5, minor=False)
+        ax.set_yticks(np.arange(n_paths) + 0.5, minor=False)
+        ax.set_xticklabels(self.df_zscore_early.columns, minor=False, rotation=-45, fontsize=9, ha="left")
+        ax.set_yticklabels(self.df_zscore_early.index, minor=False, fontsize=8)
+
+        ax.vlines([len(cell_names)], 0, 86, linewidth=1, colors='k')
+        ax.vlines([2 * len(cell_names)], 0, 86, linewidth=1, colors='k')
+        plt.setp(ax.get_yticklabels(), fontsize=7)
+        ax.set_title("Disease pseudotime     Resilience", fontsize=9)
+
+        plt.gca().invert_yaxis()
         plt.tight_layout()
         if save_fig_fn is not None:
             plt.savefig(save_fig_fn)
