@@ -1162,6 +1162,128 @@ class PathEnrichmentAllCells:
             plt.savefig(save_fig_fn)
         plt.show()
 
+class ModelCorrelations:
+
+    def __init__(self, fn0, fn1):
+
+        # fn0 and fn1 are two h5ad file names of model outputs to compare
+        # fn0 is the defined as the control
+        self.adata0 = sc.read_h5ad(fn0, "r")
+        self.adata1 = sc.read_h5ad(fn1, "r")
+
+        self.adata0 = self.adata0[self.adata0.obs.include_analysis == 1]
+        self.adata1 = self.adata1[self.adata1.obs.include_analysis == 1]
+
+    @staticmethod
+    def explained_var(x_pred, x_real):
+        idx = ~np.isnan(x_real) * (x_real > -99)
+        x = x_real[idx]
+        y = x_pred[idx]
+        ex_var = 1 - np.nanvar(x - y) / np.nanvar(x)
+        r, _ = stats.pearsonr(x, y)
+        return ex_var, r
+
+    @staticmethod
+    def classification_score(x_pred, x_real):
+        idx = ~np.isnan(x_real) * (x_real > -1)
+        s0 = np.sum((x_real[idx] == 0) * (x_pred[idx] < 0.5)) / np.sum(x_real[idx] == 0)
+        s1 = np.sum((x_real[idx] == 1) * (x_pred[idx] >= 0.5)) / np.sum(x_real[idx] == 1)
+        return (s0 + s1) / 2
+
+    def plot_figure(self, save_fig_fn = None):
+
+        dm_accuracy = []
+        br_accuracy = []
+
+        dm_accuracy_cell = []
+        br_accuracy_cell = []
+
+        f, ax = plt.subplots(4, 2, figsize=(5, 7))
+        fs = 8
+
+        for n, adata in enumerate([self.adata0, self.adata1]):
+            idx = adata.uns["donor_cell_count"] >= 5
+            br_accuracy.append(
+                self.explained_var(adata.uns["donor_pred_BRAAK_AD"][idx], adata.uns["donor_BRAAK_AD"][idx])[1]
+            )
+            dm_accuracy.append(
+                self.classification_score(adata.uns["donor_pred_Dementia"][idx], adata.uns["donor_Dementia"][idx]))
+
+            br_accuracy_cell.append(self.explained_var(adata.obs["pred_BRAAK_AD"], adata.obs["BRAAK_AD"])[1])
+            dm_accuracy_cell.append(self.classification_score(adata.obs["pred_Dementia"], adata.obs["Dementia"]))
+
+        for n, adata in enumerate([self.adata0, self.adata1]):
+            x = adata.obs["pred_BRAAK_AD"]
+            y = adata.obs["pred_Dementia"]
+            r_cell, _ = stats.pearsonr(x, y)
+            ax[n, 0].plot(x[::50], y[::50], 'k.', markersize=2, label=f"Cell R={r_cell:1.3f}")
+            ax[n, 0].legend(fontsize=fs)
+
+            idx = adata.uns["donor_cell_count"] >= 5
+            x = adata.uns["donor_pred_BRAAK_AD"][idx]
+            y = adata.uns["donor_pred_Dementia"][idx]
+
+            r_cell, _ = stats.pearsonr(x, y)
+            ax[n, 1].plot(x, y, 'k.', markersize=2, label=f"Donor R={r_cell:1.3f}")
+            ax[n, 1].legend(fontsize=fs)
+            # ax[n, 1].set_title(f"Donor-level R={r_cell:1.3f}", fontsize=fs+2)
+
+            for i in range(2):
+                ax[n, i].set_xlabel("Predicted Braak", fontsize=fs + 1)
+                ax[n, i].set_ylabel("Predicted dementia", fontsize=fs + 1)
+                ax[n, i].set_xlim([0, 6])
+                ax[n, i].set_ylim([0, 1])
+                ax[n, i].set_xticks([0, 6])
+                ax[n, i].set_xticklabels([0, 6], fontsize=fs)
+                ax[n, i].set_yticks([0, 1])
+                ax[n, i].set_yticklabels([0, 1], fontsize=fs)
+                ax[n, i].spines['top'].set_visible(False)
+                ax[n, i].spines['right'].set_visible(False)
+
+        cells = ["Standard training", "Equal sampling", ]
+        ax1 = ax[2, 0]
+        ax1.set_ylabel('Braak Pearson R')  # we already handled the x-label with ax1
+        for n, c in enumerate(cells):
+            ax1.bar(n, br_accuracy_cell[n], label=c)
+        ax1.set_ylim([0.2, 0.6])
+        ax1.grid(True)
+        ax1.legend(fontsize=7)
+        # ax1.set_xticks(np.arange(3), cells, rotation=-45, ha="left")
+        ax1.set_xticks([])
+
+        ax1 = ax[2, 1]
+        ax1.set_ylabel('Dementia Acc.')
+        for n, c in enumerate(cells):
+            ax1.bar(n, dm_accuracy_cell[n], label=c)
+        ax1.set_ylim([0.5, 0.7])
+        # ax1.set_xticks(np.arange(3), cells, rotation=-45, ha="left")
+        ax1.grid(True)
+        ax1.set_xticks([])
+
+        ax1 = ax[3, 0]
+        ax1.set_ylabel('Braak Pearson R')  # we already handled the x-label with ax1
+        for n, c in enumerate(cells):
+            ax1.bar(n, br_accuracy[n], label=c)
+        ax1.set_ylim([0.2, 0.6])
+        ax1.grid(True)
+        ax1.legend(loc="lower left", fontsize=7)
+        # ax1.set_xticks(np.arange(3), cells, rotation=-45, ha="left")
+        ax1.set_xticks([])
+
+        ax1 = ax[3, 1]
+        ax1.set_ylabel('Dementia Acc.')
+        for n, c in enumerate(cells):
+            ax1.bar(n, dm_accuracy[n], label=c)
+        ax1.set_ylim([0.5, 0.7])
+        # ax1.set_xticks(np.arange(3), cells, rotation=-45, ha="left")
+        ax1.grid(True)
+        ax1.set_xticks([])
+
+        plt.tight_layout()
+        if save_fig_fn is not None:
+            plt.savefig(save_fig_fn)
+        plt.show()
+
 
 def output_zenith(slope_dict, save_fn, genes):
     """Out a csv of genes with associtaed scores as input for Zenith gene enrichment"""
