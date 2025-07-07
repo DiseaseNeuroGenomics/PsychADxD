@@ -478,7 +478,6 @@ class CellTrajectories:
 
             for m, idx in enumerate([idx_top, idx_bottom]):
                 y = traj_sorted[:, idx]
-                print(y.shape)
                 u0 = np.min(y, axis=0, keepdims=True)
                 u1 = np.max(y, axis=0, keepdims=True) - u0
 
@@ -486,7 +485,7 @@ class CellTrajectories:
                 u = np.mean(y, axis=1)
                 sd = np.std(y, axis=1)  # / np.sqrt(top_k)
                 time = (preds_sorted - np.min(preds_sorted)) / (np.max(preds_sorted) - np.min(preds_sorted))
-                print("AA", u.shape, time.shape)
+
                 ax.fill_between(time, u - sd, u + sd, alpha=0.1)
                 ax.plot(time, u, linewidth=3, label=suffix[m + 2 * n])
                 ax.set_xticks([0, 1])
@@ -613,6 +612,84 @@ class CellTrajectories:
         if save_fig_fn is not None:
             plt.savefig(save_fig_fn)
         plt.show()
+
+    def display_genes_in_pathway_ranks(
+        self,
+        cell_name,
+        genes_in_pathway,
+        ax,
+        gwas_pvals=None,
+        suffix="early_late",
+        increase=True,
+    ):
+
+        sign = 1.0 if increase else -1.0
+        rank_early = np.argsort(np.argsort(sign * self.cell_traj[cell_name][f"slopes_{suffix}"][0, :]))
+        rank_late = np.argsort(np.argsort(sign * self.cell_traj[cell_name][f"slopes_{suffix}"][1, :]))
+        n_genes = len(self.gene_names)
+
+        data = {"Gene": [], "AD GWAS": [], "Early Pct.": [], "Early Rank":[], "Late Pct.": [], "Late Rank": []}
+
+
+        for g in genes_in_pathway:
+            idx = np.where(self.gene_names == g)[0]
+            if len(idx) == 0:
+                continue
+            gene_idx = idx[0]
+
+            if gwas_pvals is not None and g in gwas_pvals:
+                p = gwas_pvals[g]
+            else:
+                p = "na"
+
+            data["Gene"].append(g)
+            data["AD GWAS"].append(p)
+            data["Early Pct."].append(f"{100 * rank_early[gene_idx] / n_genes:2.2f}%")
+            data["Late Pct."].append(f"{100 * rank_late[gene_idx] / n_genes:2.2f}%")
+            data["Early Rank"].append(n_genes - rank_early[gene_idx])
+            data["Late Rank"].append(n_genes - rank_early[gene_idx])
+
+        df_path = pd.DataFrame(data)
+        df_path = df_path.sort_values(by=["Early Rank"], ascending=True)
+
+        table = ax.table(cellText=df_path.values, colLabels=df_path.columns, loc='center', cellLoc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(8)  # Adjust font size
+        table.auto_set_column_width(col=list(range(len(df_path.columns))))
+
+        ax.axis('tight')
+        ax.axis('off')
+        # Adjust column widths
+
+
+    def plot_genes_in_pathway(
+        self,
+        cell_name,
+        genes_in_pathway,
+        ax,
+        normalize = True,
+        add_legend = True,
+    ):
+
+        for g in genes_in_pathway:
+
+            idx = np.where(self.gene_names == g)[0]
+            if len(idx) == 0:
+                continue
+            gene_idx = idx[0]
+
+            y = copy.deepcopy(self.cell_traj[cell_name]["gene_exp_traj"][:, gene_idx])
+            x = self.cell_traj[cell_name][f"pred_braak_traj"]
+            if normalize:
+                y -= y[0]
+            x = (x - np.min(x)) / (np.max(x) - np.min(x))
+
+            ax.plot(x, y, label=f"{g}", linewidth=2)
+
+        if add_legend:
+            pos = ax.get_position()
+            ax.set_position([pos.x0, pos.y0, pos.width * 0.85, pos.height])
+            ax.legend(loc='center right', bbox_to_anchor=(1.2, 0.5), fontsize=6)
 
 
 class GlobalTrajectory:
@@ -1012,14 +1089,8 @@ class PathEnrichmentAllCells:
             ax.vlines([t0], 0, len(pathways), linewidth=0.5, colors='k')
             ax.vlines([t1], 0, len(pathways), linewidth=0.5, colors='k')
 
-
-        # ax[0].hlines([n_protective], 0, 100, linewidth=0.5, colors='k')
-        # ax[1].hlines([n_protective], 0, 100, linewidth=0.5, colors='k')
-
         ax.tick_params(axis='y', labelsize=8)
         ax.set_xlabel("Disease pseudotime")
-        # ax[0].set_xticksminor([t0, t1])
-        # ax[0].set_xticks([ 0t0, t1], ["0", "2.33", "2.98", "99"])
         plt.tight_layout()
         if save_fig_fn is not None:
             plt.savefig(save_fig_fn)
@@ -1262,17 +1333,33 @@ def fit_piecewise(x, y, idx_early, idx_late, no_jump=False, n_bootstrap=None):
 
     return slopes, resid, y_hat
 
-def process_zenith_dfs(zenith_fns, paths_per_df=5):
+def process_zenith_dfs(
+    zenith_fns,
+    paths_per_df=5,
+    gwas_path_pvals=None,
+    gwas_pval_threshold=0.01,
+    min_genes=10,
+    max_genes=250,
+):
     dataframes = []
+
+    if gwas_path_pvals is not None:
+        gwas_df = pd.read_csv(gwas_path_pvals)
+        gwas_df = gwas_df[gwas_df.pval < gwas_pval_threshold]
 
     for fn in zenith_fns:
         df = pd.read_csv(fn)
 
         data = {"pathway": [], "Direction": [], "FDR": [], "ngenes": []}
         for p, d, f, n in zip(df["Unnamed: 0"].values, df["Direction"].values, df["FDR"].values, df["NGenes"]):
+
+
+            if gwas_path_pvals is not None and p not in list(gwas_df["pathway"].values):
+                continue
+
             j = p.find(":")
             p = p[j + 1:]
-            if n < 10 or n > 200:
+            if n < min_genes or n > max_genes:
                 continue
             include = True
             for b in figure_utils.bad_path_words:
@@ -1299,11 +1386,37 @@ def process_zenith_dfs(zenith_fns, paths_per_df=5):
 
     return dataframes
 
-def process_magma_dfs(magma_fns):
-    dataframes = []
-    scores = []
-    names = []
 
+def get_magma_results_specified_gwas(
+    magma_fn,
+    gwas="intel",
+):
+    df = pd.read_csv(magma_fn)
+    for g, p in zip(df.Gwas.values, df.P.values):
+        if g == gwas:
+            return p
+
+
+def process_magma_specified_gwas_dfs(magma_fns, gwas):
+    cells = ["EN", "IN", "Astro", "Immune", "Oligo", "OPC", "Mural", "Endo"]
+    types = ["braak_early", "braak_late", "resilience_early", "resilience_late"]
+    data = {}
+
+    for c in cells:
+        pvals = []
+        for t in types:
+            for d in ["top", "bottom"]:
+                for fn in magma_fns:
+                    if c in fn and t in fn and d in fn:
+                        pval = get_magma_results_specified_gwas(fn, gwas)
+                        pvals.append(-np.log10(pval))
+        data[c] = pvals
+
+    return data
+
+def process_magma_dfs(magma_fns):
+
+    dataframes = []
     for fn in magma_fns:
         df, titles = get_magma_results(fn)
         dataframes.append(df)
@@ -1318,9 +1431,8 @@ def process_magma_dfs(magma_fns):
 def get_magma_results(magma_fn):
 
     df = pd.read_csv(magma_fn)
-    data = {"GWAS": [], "NGENES": [], "P": []}
     data = {"GWAS": [], "P": []}
-    # print(df.Gwas.values)
+
     titles = []
     for k in figure_utils.gwas_dict.keys():
         for g, n, p in zip(df.Gwas.values, df.NGENES.values, df.P.values):
@@ -1328,19 +1440,17 @@ def get_magma_results(magma_fn):
                 data["GWAS"].append(g)
                 data["P"].append("{:.2e}".format(p))
                 titles.append(figure_utils.gwas_dict[g])
-                # data["NGENES"].append(n)
 
     return pd.DataFrame(data), titles
 
-def plot_magma_results(scores, titles, ax, fig):
+def plot_magma_results(scores, titles, ax, fig, labels = None):
+
     fs = 7
     N = scores.shape[1]
     divider = make_axes_locatable(ax)
     cax = divider.append_axes('right', size='10%', pad=0.02)
-    im = ax.imshow(-np.log10(scores), clim=(0, 5), aspect="auto")
-    labels = ["Early inc.", "Early dec.", "Late inc.", "Late dec."]
-    if N > 4:
-        labels += ["Early protect.", "Early damag.", "Late protect.", "Late damag."]
+    im = ax.imshow(-np.log10(scores), clim=(0, 5), aspect="auto", cmap="viridis")
+    labels = ["Early inc.", "Early dec.", "Late inc.", "Late dec."] if labels is None else labels
 
     ax.set_xticks(np.arange(N), labels=labels, rotation=-45, fontsize=fs, ha="left")
     ax.set_yticks(np.arange(len(titles)), labels=titles, fontsize=fs)
@@ -1353,16 +1463,16 @@ def plot_magma_results(scores, titles, ax, fig):
     for i in range(len(titles)):
         for j in range(N):
             if scores[i, j] < 0.001:
-                text = "*"
+                text = "***"
             elif scores[i, j] < 0.01:
-                text = "*"
+                text = "**"
             elif scores[i, j] < 0.05:
                 text = "*"
             else:
                 text = ""
             text = ax.text(j, i, text, ha="center", va="center", color="w", fontsize=6)
 
-def plot_zenith_results(dataframes, ax, fig, paths_per_df=6):
+def plot_zenith_results(dataframes, ax, fig, paths_per_df=6, max_fdr=10):
     fs = 6
     suffix = ["Early increase", "Early decrease", "Late increase", "Late decrease"]
     pathways = []
@@ -1397,8 +1507,8 @@ def plot_zenith_results(dataframes, ax, fig, paths_per_df=6):
 
     # cmap = plt.imshow(np.reshape(ng, (5, -1)), clim=(10, 60))
     ax.set_yticks(np.arange(0, - paths_per_df * 4, -1), pathways, fontsize=fs)
-    ax.set_xlim([0, 10])
-    ax.set_xticks([0, 10])
+    ax.set_xlim([0, max_fdr])
+    ax.set_xticks([0, max_fdr])
     # ax.set_yticks(np.arange(len(pathways)), labels=pathways)
     for n, ytick in enumerate(ax.get_yticklabels()):
         ytick.set_color(colors[n // paths_per_df])
@@ -1426,3 +1536,5 @@ def exclusive_gene_lists(slopes, top_k=250, exclusive=True):
                 if exclusive:
                     excluded_genes.append(idx[i][n])
     return gene_list
+
+
