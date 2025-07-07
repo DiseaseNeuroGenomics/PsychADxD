@@ -19,6 +19,10 @@ matplotlib.rcParams['pdf.fonttype'] = 42
 import matplotlib.colors as mcolors
 from matplotlib.colors import Normalize
 import matplotlib.patches as patches
+prop_cycle = plt.rcParams['axes.prop_cycle']
+colors = prop_cycle.by_key()['color']
+
+import seaborn as sns
 
 import palantir
 from py_monocle import (
@@ -29,7 +33,7 @@ from py_monocle import (
     differential_expression_genes,
 )
 
-import pathway_utils
+import figure_utils
 
 def classification_score(x_pred, x_real):
     s0 = np.sum((x_real == 0) * (x_pred < 0.5)) / np.sum(x_real == 0)
@@ -394,9 +398,12 @@ class CellTrajectories:
             plt.savefig(save_fig_fn)
         plt.show()
 
-    def output_slopes_for_zenith(self, zenith_save_path, suffix = ""):
+    def output_slopes_for_zenith(self, zenith_save_path, suffix = "", cell_names = None):
 
-        for name in self.cell_names:
+        """Outputs slopes/resilience to csv file, can then be used for Zenith analysis"""
+        cell_names = self.cell_names if cell_names is None else cell_names
+
+        for name in cell_names:
             save_fn = os.path.join(zenith_save_path, f"{name}_zenith_input.csv")
 
             slopes = {}
@@ -419,14 +426,18 @@ class CellTrajectories:
         time_pts_donors = None,
         time_pts_pct = None,
         suffix = "",
+        cell_names = None, # if None, just use default stored in self.cell_names
     ):
+
+        """Calculate slopes with respect to Braak and resilience scores"""
 
         # time_pts_donors = e.g. [[0, 60], [20, 80], [40, 100],...]
         # time_pts_pct = e.g. [[0, 0.2], [0.2, 1.0]]
+        cell_names = self.cell_names if cell_names is None else cell_names
 
         assert (time_pts_donors is None) ^ (time_pts_pct is None), "Either time_pts_donors or time_pts_pct must be defined "
 
-        for name in self.cell_names:
+        for name in cell_names:
 
             N = len(self.cell_traj[name]["pred_braak_traj"])
             time_pts = []
@@ -434,7 +445,7 @@ class CellTrajectories:
                 for t in time_pts_pct:
                     time_pts.append([int(t[0] * N), int(t[1] * N)])
             else:
-                for t in time_pts_pct:
+                for t in time_pts_donors:
                     if t[1] <= N:
                         time_pts.append([t[0], t[1]])
 
@@ -444,6 +455,164 @@ class CellTrajectories:
                 self.cell_traj[name]["gene_exp_traj"],
                 self.cell_traj[name]["resilience_traj"],
             )
+
+            self.cell_traj[name][f"braak_mid_time_pts_{suffix}"] = [
+                self.cell_traj[name]["pred_braak_traj"][(t[0] + t[1]) // 2] for t in time_pts
+            ]
+
+    def plot_mean_traj(self, cell_name, top_k, xlabel, ax, suffix="early_late"):
+
+        slopes = self.cell_traj[cell_name][f"slopes_{suffix}"]
+        preds  = self.cell_traj[cell_name][f"pred_braak_traj"]
+        traj = self.cell_traj[cell_name]["gene_exp_traj"]
+
+        idx = np.argsort(preds)
+        preds_sorted = preds[idx]
+        traj_sorted = traj[idx]
+
+        fs = 7
+        suffix = ["Early increase", "Early decrease", "Late increase", "Late decrease"]
+        for n, x in enumerate([slopes[0, :], slopes[1, :]]):
+            idx_top = np.argsort(x)[::-1][:top_k]
+            idx_bottom = np.argsort(x)[:top_k]
+
+            for m, idx in enumerate([idx_top, idx_bottom]):
+                y = traj_sorted[:, idx]
+                print(y.shape)
+                u0 = np.min(y, axis=0, keepdims=True)
+                u1 = np.max(y, axis=0, keepdims=True) - u0
+
+                y = (y - u0) / u1
+                u = np.mean(y, axis=1)
+                sd = np.std(y, axis=1)  # / np.sqrt(top_k)
+                time = (preds_sorted - np.min(preds_sorted)) / (np.max(preds_sorted) - np.min(preds_sorted))
+                print("AA", u.shape, time.shape)
+                ax.fill_between(time, u - sd, u + sd, alpha=0.1)
+                ax.plot(time, u, linewidth=3, label=suffix[m + 2 * n])
+                ax.set_xticks([0, 1])
+                ax.set_yticks([0, 1])
+                ax.set_xticklabels([0, 1], fontsize=fs)
+                ax.set_yticklabels([0, 1], fontsize=fs)
+                ax.set_xlabel(xlabel, fontsize=fs)
+                ax.set_ylabel("Normalized mean expression", fontsize=fs)
+                ax.set_xlim([0, 1])
+                ax.set_ylim([0, 1])
+
+        ax.legend(fontsize=7, loc='upper right')
+
+    def plot_gene_scores_specified(
+        self,
+        ax,
+        fig,
+        cell_name="Immune",
+        suffix="early_late",
+        top_k=5,
+        normalize=True,
+        interpolate_traj=True,
+        edge_num_exclude=10,
+    ):
+
+        slopes = self.cell_traj[cell_name][f"slopes_{suffix}"]
+        pred_braak = self.cell_traj[cell_name][f"pred_braak_traj"]
+        braak_traj = self.cell_traj[cell_name]["gene_exp_traj"]
+        idx = np.argsort(pred_braak)
+        pred_braak_sorted = pred_braak[idx]
+        braak_traj_sorted = braak_traj[idx]
+
+
+        fs = 7
+        idx = []
+        gene_list = exclusive_gene_lists(slopes, top_k=250)
+        for i in range(4):
+            idx += gene_list[i][:top_k]
+
+
+        if interpolate_traj:
+            N = 100
+            z = np.zeros((N, len(idx)))
+            for m, j in enumerate(idx):
+                """
+                x0 = np.linspace(np.min(pred_braak), np.max(pred_braak), N)
+                z[:N, m] = np.interp(x0, pred_braak, braak_traj[:, j])
+                x0 = np.linspace(np.min(pred_dementia), np.max(pred_dementia), N)
+                z[N:, m]  = np.interp(x0, pred_dementia, dementia_traj[:, j])
+
+                """
+                x0 = np.linspace(np.min(pred_braak_sorted), np.max(pred_braak_sorted), N + 1)
+                y = np.interp(x0, pred_braak_sorted, braak_traj_sorted[:, j])
+                z[:N, m] = np.diff(y) / np.diff(x0)
+                # x0 = np.linspace(np.min(pred_braak_sorted), np.max(pred_braak_sorted), N)
+                # y = np.interp(x0, pred_braak_sorted, resilience_sorted[:, j])
+                # z[N:, m] = y
+
+            # z -= np.mean(z, axis=0, keepdims=True)
+            # z /= np.max(z, axis=0, keepdims=True)
+        else:
+            z = np.vstack((slopes_br[:, idx], slopes_dm[:, idx]))
+
+        m = np.max(np.abs(z))
+        sd = np.std(z)
+
+        im = ax.imshow(z, vmin=-5 * sd, vmax=5 * sd, aspect="auto", cmap="bwr", interpolation="none")
+        # ax.plot([-0.5, 4*top_k-0.5], [N, N], 'k-')
+        ax.set_xlim([-0.5, 4 * top_k - 0.5])
+        genes = self.gene_names[idx].tolist()
+        for n, g in enumerate(genes):
+            if g.startswith("ENS"):
+                genes[n] = g[:3] + "..." + g[-4:]
+        ax.set_xticks(range(len(idx)), genes, rotation=-45, fontsize=fs, ha="left")
+        for n, xtick in enumerate(ax.get_xticklabels()):
+            xtick.set_color(colors[n // top_k])
+        ax.set_yticks([50], ["BRAAK"], fontsize=fs, rotation=90)
+        ax.yaxis.set_tick_params(length=0)
+        ax.xaxis.set_tick_params(length=3.0)
+
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes('right', size='1%', pad=0.01)
+        cbar = fig.colorbar(im, cax=cax, orientation='vertical')
+        cbar.ax.tick_params(labelsize=fs)
+
+    def plot_gene_summary(
+        self,
+        cell_name="Immune",
+        zenith_fns=None,
+        magma_fns=None,
+        top_k=250,
+        xlabel="Disease pseudotime",
+        save_fig_fn=None,
+        n_pathways=5,
+        top_k_genes=20,
+    ):
+        fig = plt.figure(constrained_layout=True, figsize=(10.5, 5))
+        gs = gridspec.GridSpec(10, 10, figure=fig)
+
+        bbox = [0, 0, 1, 1]
+        ax0 = fig.add_subplot(gs[:6, :3])
+        self.plot_mean_traj(cell_name, top_k, xlabel, ax0)
+
+        dataframes = process_zenith_dfs(zenith_fns, paths_per_df=n_pathways)
+        ax1 = fig.add_subplot(gs[:6, 5:7])
+        plot_zenith_results(dataframes, ax1, fig, paths_per_df=n_pathways)
+
+        magma_scores, magma_titles = process_magma_dfs(magma_fns)
+        ax1 = fig.add_subplot(gs[:6, 9])
+        plot_magma_results(magma_scores, magma_titles, ax1, fig)
+
+        ax1 = fig.add_subplot(gs[7:, :])
+
+        self.plot_gene_scores_specified(
+            ax1,
+            fig,
+            top_k=top_k_genes,
+            normalize=True,
+            interpolate_traj=True,
+        )
+
+        fig.get_layout_engine().set(w_pad=0.25, h_pad=0.25, hspace=0.1, wspace=0.1)
+        # plt.tight_layout()
+        if save_fig_fn is not None:
+            plt.savefig(save_fig_fn)
+        plt.show()
 
 
 class GlobalTrajectory:
@@ -542,6 +711,7 @@ class GlobalTrajectory:
             max_time=None,
             no_jump=True,
         )
+        t1 = self.traj_data["t1"]
         self.traj_data["t0"], _, _, _ = fit_piecewise_search(
             self.traj_data[f"filtered_{k}"][:t1],
             self.traj_data["pca_filtered_gene_exp"][:t1, :],
@@ -553,7 +723,7 @@ class GlobalTrajectory:
         self.traj_data["t0_pct"] = self.traj_data["t0"] / len(self.eligible_donors)
         self.traj_data["t1_pct"] = self.traj_data["t1"] / len(self.eligible_donors)
 
-        print(f" Transition times: donor {t0} and donor {t1}")
+        print(f" Transition times: donor {self.traj_data['t0']} and donor {self.traj_data['t1']}")
 
     def plot_pca_figure(self, k = "pred_BRAAK_AD", save_fig_fn = None):
 
@@ -681,12 +851,69 @@ class PathEnrichmentAllCells:
                 data["ngenes"].append(n)
 
         self.df_filtered = pd.DataFrame(data=data)
-        self.df_filtered = pathway_utils.remove_bad_terms( self.df_filtered)
+        self.df_filtered = figure_utils.remove_bad_terms( self.df_filtered)
         self.df_filtered =  self.df_filtered.sort_values(["FDR"])
         self.df_filtered =  self.df_filtered.reset_index(None)
 
     def save_filtered_data(self, save_fn):
         self.df_filtered.to_csv(save_fn)
+
+    def _generate_data_time_pts(self, pathways):
+
+        df_full = self.df_full[self.df_full.pathway.isin(pathways)]
+        fns = df_full.fn.unique()
+        n_time_pts = len(fns)
+        n_paths = len(pathways)
+
+        self.fdr = np.zeros((n_paths, n_time_pts)) # [pathway, time pts]
+        self.z_score = np.zeros((n_paths, n_time_pts))
+
+        for i, p in enumerate(pathways):
+            df_rows = df_full[df_full.pathway == p]
+            df_rows = df_rows.reset_index()
+            for n in range(n_time_pts):
+                for j in range(len(df_rows)):
+                    if f"time{n+1}.csv" in df_rows.loc[j].fn:
+                        self.fdr[i, n] = - np.sign(df_rows.loc[j].delta) * np.log10(df_rows.loc[j].FDR)
+                        self.z_score[i, n] = df_rows.loc[j].delta / df_rows.loc[j].se
+
+
+    def _generate_dataframes_time_pts(
+        self,
+        pathways,
+        time_pts = None,
+        cluster_pathways = False,
+        n_interp_pts = 100,
+    ):
+
+        n_paths = len(pathways)
+        new_pathways = []
+        for p in pathways:
+            new_pathways.append(figure_utils.condense_pathways(p))
+
+        if cluster_pathways:
+            Z = linkage(np.reshape(self.z_score, (self.z_score.shape[0], -1)), method='ward')
+            s = dendrogram(Z, no_plot=True)
+            idx = [s["leaves"][i] for i in range(n_paths)]
+            new_pathways = [new_pathways[i] for i in idx]
+            self.z_score = self.z_score[idx]
+            self.fdr = self.fdr[idx]
+
+        time_pts = self.fdr.shape[1] if time_pts is None else time_pts
+        t_new = np.linspace(time_pts[0], time_pts[-1], n_interp_pts)
+        n_paths = len(pathways)
+
+        fdr_interp = np.zeros((n_paths, n_interp_pts))
+        z_score_interp = np.zeros((n_paths, n_interp_pts))
+
+        for n in range(n_paths):
+            fdr_interp[n, :] = np.interp(t_new, time_pts, self.fdr[n, :])
+            z_score_interp[n, :] = np.interp(t_new, time_pts, self.z_score[n, :])
+
+        self.df_fdr = pd.DataFrame(fdr_interp, index=new_pathways, columns=t_new)
+        self.df_z_score = pd.DataFrame(z_score_interp, index=new_pathways, columns=t_new)
+        self.time_pts_interp = t_new
+
 
     def _generate_early_late_data(
         self,
@@ -725,7 +952,7 @@ class PathEnrichmentAllCells:
         n_paths = len(pathways)
         new_pathways = []
         for p in pathways:
-            new_pathways.append(pathway_utils.condense_pathways(p))
+            new_pathways.append(figure_utils.condense_pathways(p))
 
         if cluster_pathways:
             Z = linkage(np.reshape(self.z_score, (self.z_score.shape[0], -1)), method='ward')
@@ -747,6 +974,56 @@ class PathEnrichmentAllCells:
         self.df_zscore_late = pd.DataFrame(
             data=np.reshape(self.z_score[:, 1], (n_paths, -1)), index=new_pathways, columns=2 * cell_names,
         )
+
+    def generate_sliding_window_figure(
+        self,
+        pathways,
+        time_pts=None,
+        pred_braak_traj=None,
+        transition_pts=None,
+        cluster_pathways=False,
+        figsize=(6.0, 6.0),
+        save_fig_fn=None,
+    ):
+
+        self._generate_data_time_pts(pathways)
+        self._generate_dataframes_time_pts(pathways, time_pts=time_pts, cluster_pathways=cluster_pathways)
+
+        f, ax = plt.subplots(1, 1, figsize=figsize, sharey=True)
+        max_val = 8
+        sns.heatmap(
+            self.df_z_score,
+            ax=ax,
+            cmap='RdBu_r',
+            center=True,
+            vmin=-max_val,
+            vmax=max_val,
+            cbar=False,
+            xticklabels=False,
+        )
+
+
+        if transition_pts is not None and pred_braak_traj is not None:
+            t0, t1 = transition_pts[0], transition_pts[1]
+            t0 = int(t0 * len(pred_braak_traj))
+            t1 = int(t1 * len(pred_braak_traj))
+            t0 = np.argmin(np.abs(self.time_pts_interp - pred_braak_traj[t0]))
+            t1 = np.argmin(np.abs(self.time_pts_interp - pred_braak_traj[t1]))
+            ax.vlines([t0], 0, len(pathways), linewidth=0.5, colors='k')
+            ax.vlines([t1], 0, len(pathways), linewidth=0.5, colors='k')
+
+
+        # ax[0].hlines([n_protective], 0, 100, linewidth=0.5, colors='k')
+        # ax[1].hlines([n_protective], 0, 100, linewidth=0.5, colors='k')
+
+        ax.tick_params(axis='y', labelsize=8)
+        ax.set_xlabel("Disease pseudotime")
+        # ax[0].set_xticksminor([t0, t1])
+        # ax[0].set_xticks([ 0t0, t1], ["0", "2.33", "2.98", "99"])
+        plt.tight_layout()
+        if save_fig_fn is not None:
+            plt.savefig(save_fig_fn)
+
 
     def generate_early_late_figure(
         self,
@@ -985,3 +1262,167 @@ def fit_piecewise(x, y, idx_early, idx_late, no_jump=False, n_bootstrap=None):
 
     return slopes, resid, y_hat
 
+def process_zenith_dfs(zenith_fns, paths_per_df=5):
+    dataframes = []
+
+    for fn in zenith_fns:
+        df = pd.read_csv(fn)
+
+        data = {"pathway": [], "Direction": [], "FDR": [], "ngenes": []}
+        for p, d, f, n in zip(df["Unnamed: 0"].values, df["Direction"].values, df["FDR"].values, df["NGenes"]):
+            j = p.find(":")
+            p = p[j + 1:]
+            if n < 10 or n > 200:
+                continue
+            include = True
+            for b in figure_utils.bad_path_words:
+                if b in p:
+                    include = False
+            if not include:
+                continue
+
+            data["pathway"].append(p)
+            data["Direction"].append(d)
+            data["FDR"].append(np.float32(f))
+            data["ngenes"].append(n)
+
+        df = pd.DataFrame(data=data)
+        df0 = df[df.Direction == "Up"]
+        df0 = df0[:paths_per_df]
+        df1 = df[df.Direction == "Down"]
+        df1 = df1[:paths_per_df]
+        df0 = df0.drop(["Direction"], axis=1)
+        df1 = df1.drop(["Direction"], axis=1)
+
+        dataframes.append(df0)
+        dataframes.append(df1)
+
+    return dataframes
+
+def process_magma_dfs(magma_fns):
+    dataframes = []
+    scores = []
+    names = []
+
+    for fn in magma_fns:
+        df, titles = get_magma_results(fn)
+        dataframes.append(df)
+
+    scores = np.zeros((len(titles), len(magma_fns)))
+    for i, df in enumerate(dataframes):
+        for n in range(len(titles)):
+            scores[n, i] = np.float32(df["P"].values[n])
+
+    return scores, titles
+
+def get_magma_results(magma_fn):
+
+    df = pd.read_csv(magma_fn)
+    data = {"GWAS": [], "NGENES": [], "P": []}
+    data = {"GWAS": [], "P": []}
+    # print(df.Gwas.values)
+    titles = []
+    for k in figure_utils.gwas_dict.keys():
+        for g, n, p in zip(df.Gwas.values, df.NGENES.values, df.P.values):
+            if k == g:
+                data["GWAS"].append(g)
+                data["P"].append("{:.2e}".format(p))
+                titles.append(figure_utils.gwas_dict[g])
+                # data["NGENES"].append(n)
+
+    return pd.DataFrame(data), titles
+
+def plot_magma_results(scores, titles, ax, fig):
+    fs = 7
+    N = scores.shape[1]
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes('right', size='10%', pad=0.02)
+    im = ax.imshow(-np.log10(scores), clim=(0, 5), aspect="auto")
+    labels = ["Early inc.", "Early dec.", "Late inc.", "Late dec."]
+    if N > 4:
+        labels += ["Early protect.", "Early damag.", "Late protect.", "Late damag."]
+
+    ax.set_xticks(np.arange(N), labels=labels, rotation=-45, fontsize=fs, ha="left")
+    ax.set_yticks(np.arange(len(titles)), labels=titles, fontsize=fs)
+    cbar = fig.colorbar(im, cax=cax, orientation='vertical', ticks=(0, 5))
+    cbar.ax.tick_params(labelsize=fs)
+    # fig.colorbar(im, ax=ax)
+    ax.yaxis.set_tick_params(length=0)
+    ax.xaxis.set_tick_params(length=0)
+
+    for i in range(len(titles)):
+        for j in range(N):
+            if scores[i, j] < 0.001:
+                text = "*"
+            elif scores[i, j] < 0.01:
+                text = "*"
+            elif scores[i, j] < 0.05:
+                text = "*"
+            else:
+                text = ""
+            text = ax.text(j, i, text, ha="center", va="center", color="w", fontsize=6)
+
+def plot_zenith_results(dataframes, ax, fig, paths_per_df=6):
+    fs = 6
+    suffix = ["Early increase", "Early decrease", "Late increase", "Late decrease"]
+    pathways = []
+    scores = []
+    count = 0
+    ax.plot([-np.log10(0.05), -np.log10(0.05)], [0.5 - paths_per_df * 4, 0.5], 'k--')
+    # ax.plot([-np.log10(0.01), -np.log10(0.01)], [0.5-paths_per_df * 4, 0.5], 'k--')
+    ax.set_xlabel("-log10 FDR", fontsize=fs)
+
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes('right', size='4%', pad=0.02)
+    ng = []
+    for m, df in enumerate(dataframes):
+        for n in range(paths_per_df):
+            ngenes = np.minimum(199, df["ngenes"].values[n])
+            ng.append(ngenes)
+    max_genes = np.max(ng)
+    norm = matplotlib.colors.Normalize(vmin=10.0, vmax=max_genes)
+
+    for m, df in enumerate(dataframes):
+        for n in range(paths_per_df):
+            ngenes = np.minimum(199, df["ngenes"].values[n])
+            p = df["pathway"].values[n]
+            p = figure_utils.condense_pathways(p)
+            pathways.append(p)
+            scores.append(df["FDR"].values[n])
+            rgba_color = np.array(plt.cm.viridis(norm(ngenes), bytes=True)).reshape(-1, 4) / 255
+            bar = ax.barh(-count, - np.log10(df["FDR"].values[n]), label=suffix[m], color=rgba_color)
+            count += 1
+    scores = np.array(scores)[:, None]
+    scores = np.tile(scores, (1, 2))
+
+    # cmap = plt.imshow(np.reshape(ng, (5, -1)), clim=(10, 60))
+    ax.set_yticks(np.arange(0, - paths_per_df * 4, -1), pathways, fontsize=fs)
+    ax.set_xlim([0, 10])
+    ax.set_xticks([0, 10])
+    # ax.set_yticks(np.arange(len(pathways)), labels=pathways)
+    for n, ytick in enumerate(ax.get_yticklabels()):
+        ytick.set_color(colors[n // paths_per_df])
+
+    ax.yaxis.set_tick_params(length=0)
+    ax.set_ylim([0.25 - paths_per_df * 4, 0.75])
+    # fig.colorbar(bar, cax=cax, orientation='vertical', ticks=[10, 60])
+    cbar = fig.colorbar(cm.ScalarMappable(norm=norm, cmap="viridis"), cax=cax, orientation='vertical',
+                        ticks=[10, max_genes])
+    cbar.ax.tick_params(labelsize=fs)
+
+def exclusive_gene_lists(slopes, top_k=250, exclusive=True):
+    idx = []
+    idx.append(np.argsort(slopes[0, :])[::-1])
+    idx.append(np.argsort(slopes[0, :]))
+    idx.append(np.argsort(slopes[1, :])[::-1])
+    idx.append(np.argsort(slopes[1, :]))
+    gene_list = [[] for _ in range(4)]
+
+    excluded_genes = []
+    for n in range(2 * top_k):
+        for i in range(4):
+            if not idx[i][n] in excluded_genes and len(gene_list[i]) < top_k:
+                gene_list[i].append(idx[i][n])
+                if exclusive:
+                    excluded_genes.append(idx[i][n])
+    return gene_list
