@@ -404,7 +404,7 @@ class CellTrajectories:
         cell_names = self.cell_names if cell_names is None else cell_names
 
         for name in cell_names:
-            save_fn = os.path.join(zenith_save_path, f"{name}_zenith_input.csv")
+            save_fn = os.path.join(zenith_save_path, f"{name}.csv")
 
             slopes = {}
             n_slopes = len(self.cell_traj[name][f"slopes_{suffix}"])
@@ -530,19 +530,10 @@ class CellTrajectories:
             N = 100
             z = np.zeros((N, len(idx)))
             for m, j in enumerate(idx):
-                """
-                x0 = np.linspace(np.min(pred_braak), np.max(pred_braak), N)
-                z[:N, m] = np.interp(x0, pred_braak, braak_traj[:, j])
-                x0 = np.linspace(np.min(pred_dementia), np.max(pred_dementia), N)
-                z[N:, m]  = np.interp(x0, pred_dementia, dementia_traj[:, j])
 
-                """
                 x0 = np.linspace(np.min(pred_braak_sorted), np.max(pred_braak_sorted), N + 1)
                 y = np.interp(x0, pred_braak_sorted, braak_traj_sorted[:, j])
                 z[:N, m] = np.diff(y) / np.diff(x0)
-                # x0 = np.linspace(np.min(pred_braak_sorted), np.max(pred_braak_sorted), N)
-                # y = np.interp(x0, pred_braak_sorted, resilience_sorted[:, j])
-                # z[N:, m] = y
 
             # z -= np.mean(z, axis=0, keepdims=True)
             # z /= np.max(z, axis=0, keepdims=True)
@@ -553,7 +544,6 @@ class CellTrajectories:
         sd = np.std(z)
 
         im = ax.imshow(z, vmin=-5 * sd, vmax=5 * sd, aspect="auto", cmap="bwr", interpolation="none")
-        # ax.plot([-0.5, 4*top_k-0.5], [N, N], 'k-')
         ax.set_xlim([-0.5, 4 * top_k - 0.5])
         genes = self.gene_names[idx].tolist()
         for n, g in enumerate(genes):
@@ -1285,6 +1275,126 @@ class ModelCorrelations:
         plt.show()
 
 
+class ResilienceVisualization:
+    """Class used to generate visualization of protective and damaging pathways
+    Supplementary Figure 21
+    requires R_scripts/zenith_donor.R to perform pathway enrichment for each donor
+    """
+
+    def __init__(self, data_fns, save_fns, cell_names):
+
+        self.data_fns = data_fns
+        self.save_fns = save_fns
+        self.cell_names = cell_names
+
+        self._add_braak_dementia()
+
+
+    def _add_braak_dementia(self):
+
+        self.data_bd = {}
+        self.donor_index = {}
+        for fn, cell_name in zip(self.data_fns, self.cell_names):
+            self.data_bd[cell_name] = {}
+            adata = sc.read_h5ad(fn, "r")
+            idx = np.where(adata.uns["donor_cell_count"] >= 5)[0]
+            self.donor_index[cell_name] = idx
+            self.data_bd[cell_name]["braak"] = adata.uns["donor_pred_BRAAK_AD"][idx]
+            self.data_bd[cell_name]["dementia"] = adata.uns["donor_pred_Dementia"][idx]
+
+    def add_zenith_results(self, zenith_out_dir):
+
+        self.data_zenith = {}
+        for fn, cell_name in zip(self.save_fns, self.cell_names):
+
+            self.data_zenith[cell_name] = {}
+            n_donors = len(self.donor_index[cell_name])
+            for n in range(1, n_donors + 1):
+                fn = os.path.join(zenith_out_dir, f"{cell_name}_donor{n}.csv")
+                df = pd.read_csv(fn)
+
+                for p, d, se in zip(df["Unnamed: 0"], df.delta, df.se):
+                    p1 = p.split(":")[1][1:]
+                    if not p1 in self.data_zenith[cell_name]:
+                        self.data_zenith[cell_name][p1] = [d / se]
+                    else:
+                        self.data_zenith[cell_name][p1].append(d / se)
+
+    def output_zenith(self):
+
+        for fn, save_fn, cell_name in zip(self.data_fns, self.save_fns, self.cell_names):
+
+            adata = sc.read_h5ad(fn, "r")
+            self.gene_names = adata.uns["gene_name"]
+            idx = self.donor_index[cell_name]
+            X = adata.uns["donor_gene_means"] - np.mean(adata.uns["donor_gene_means"][idx, :], axis=0, keepdims=True)
+
+            gene_exp_dict = {}
+            for n, i in enumerate(idx):
+                gene_exp_dict[f"donor{n}"] = X[i, :]
+
+            genes = copy.deepcopy(list(self.gene_names))
+            for n, g in enumerate(genes):
+                if n == 0:
+                    continue
+                if g in genes[:n]:
+                    genes[n] = g + "-1"
+            output_zenith(gene_exp_dict, save_fn, genes)
+
+    def plot_figures(self, path_info, max_val = 8, save_fig_fn = None):
+
+        # path_info is a list of tuples, specifying the cell name and the pathway
+        # e.g. path_info = [("Immune", "positive regulation of monocyte differentiation"), ("IN", "neuron cell-cell adhesion")]
+
+        n_paths = len(path_info)
+
+        f, ax = plt.subplots(1, n_paths, figsize=(2 * n_paths, 2.5), sharex=False, sharey=False)
+        for n in range(n_paths):
+
+            cell = path_info[n][0]
+            k = path_info[n][1]
+            vals = np.clip(np.array(self.data_zenith[cell][k]), -50, 50)
+            x = self.data_bd[cell]["braak"]
+            y = self.data_bd[cell]["dementia"]
+            u0 = np.min(x)
+            u1 = np.max(x)
+            x = (x - u0) / (u1 - u0)
+
+            z = ax[n].hexbin(x, y, C=vals, gridsize=20, cmap="bwr", clim=(-max_val, max_val))
+
+            if n == 0:
+                ax[n].set_xlabel("Disease pseudotime", fontsize=9)
+                ax[n].set_ylabel("Predicted Dementia", fontsize=9)
+            if len(k) < 32:
+                k1 = k
+            else:
+                k0 = k.split(" ")
+                m = len(k0)
+                k1 = " ".join(k0[:m // 2])
+                k2 = " ".join(k0[m // 2:])
+                k1 = f"{k1} \n {k2}"
+
+            ax[n].set_title(f"{cell} \n {k1}", fontdict={'size': 7, 'color': 'g'})
+
+            ax[n].set_xticks([0, 1.0])
+            ax[n].set_yticks([0.2, 0.8])
+            ax[n].set_xlim([-0.05, 1.05])
+
+
+        divider = make_axes_locatable(ax[n])
+        cax = divider.append_axes('right', size='4%', pad=0.02)
+        norm = matplotlib.colors.Normalize(vmin=-max_val, vmax=max_val)
+        cbar = f.colorbar(
+            cm.ScalarMappable(norm=norm, cmap="bwr"), cax=cax, orientation='vertical',
+            ticks=[-max_val, 0, max_val]
+        )
+
+        plt.tight_layout()
+        if save_fig_fn is not None:
+            plt.savefig(save_fig_fn)
+        plt.show()
+
+
 def output_zenith(slope_dict, save_fn, genes):
     """Out a csv of genes with associtaed scores as input for Zenith gene enrichment"""
 
@@ -1578,7 +1688,6 @@ def plot_magma_results(scores, titles, ax, fig, labels = None):
     ax.set_yticks(np.arange(len(titles)), labels=titles, fontsize=fs)
     cbar = fig.colorbar(im, cax=cax, orientation='vertical', ticks=(0, 5))
     cbar.ax.tick_params(labelsize=fs)
-    # fig.colorbar(im, ax=ax)
     ax.yaxis.set_tick_params(length=0)
     ax.xaxis.set_tick_params(length=0)
 
@@ -1601,7 +1710,6 @@ def plot_zenith_results(dataframes, ax, fig, paths_per_df=6, max_fdr=10):
     scores = []
     count = 0
     ax.plot([-np.log10(0.05), -np.log10(0.05)], [0.5 - paths_per_df * 4, 0.5], 'k--')
-    # ax.plot([-np.log10(0.01), -np.log10(0.01)], [0.5-paths_per_df * 4, 0.5], 'k--')
     ax.set_xlabel("-log10 FDR", fontsize=fs)
 
     divider = make_axes_locatable(ax)
@@ -1627,17 +1735,14 @@ def plot_zenith_results(dataframes, ax, fig, paths_per_df=6, max_fdr=10):
     scores = np.array(scores)[:, None]
     scores = np.tile(scores, (1, 2))
 
-    # cmap = plt.imshow(np.reshape(ng, (5, -1)), clim=(10, 60))
     ax.set_yticks(np.arange(0, - paths_per_df * 4, -1), pathways, fontsize=fs)
     ax.set_xlim([0, max_fdr])
     ax.set_xticks([0, max_fdr])
-    # ax.set_yticks(np.arange(len(pathways)), labels=pathways)
     for n, ytick in enumerate(ax.get_yticklabels()):
         ytick.set_color(colors[n // paths_per_df])
 
     ax.yaxis.set_tick_params(length=0)
     ax.set_ylim([0.25 - paths_per_df * 4, 0.75])
-    # fig.colorbar(bar, cax=cax, orientation='vertical', ticks=[10, 60])
     cbar = fig.colorbar(cm.ScalarMappable(norm=norm, cmap="viridis"), cax=cax, orientation='vertical',
                         ticks=[10, max_genes])
     cbar.ax.tick_params(labelsize=fs)
