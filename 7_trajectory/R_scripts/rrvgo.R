@@ -1,3 +1,5 @@
+### rrvgo analysis to summarize a large number of GO pathways
+
 library(rrvgo)
 
 fn = "processed_data/rrvgo/rrvgo_input.csv"

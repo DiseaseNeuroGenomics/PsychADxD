@@ -1,4 +1,4 @@
-### Calculates the Zenith pathway enrichment for each individual donor
+### Calculates the Zenith pathway enrichment for each time window
 
 library(GSEABase)
 library(zenith)
