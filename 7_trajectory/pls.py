@@ -18,34 +18,29 @@ class PLS:
     from raw spike counts.
     Used for Supplementary Figure 15
     """
-    def __init__(self, meta_fn, data_path, splits_fn, restrictions):
+    def __init__(self, meta_fn, data_path, splits_fn, restrictions, top_k_genes = 10_000):
 
         self.remove_sex_chrom = True
         self.protein_coding_only = True
         self.include_analysis = True
-        self.top_k_genes = 10_000
+        self.top_k_genes = top_k_genes
         self.splits = pickle.load(open(splits_fn, "rb"))
 
         self.data_path = data_path
         self.metadata = pickle.load(open(meta_fn, "rb"))
         self._restrict_samples(restrictions)
         self._get_gene_index()
+        gc.collect()
 
     def _restrict_samples(self, restrictions):
 
-        self.cell_idx = np.arange(len(self.metadata["obs"]["class"]))
-
-        cond = np.zeros(len(self.metadata["obs"]["class"]), dtype=np.uint8)
-        cond[self.cell_idx] = 1
+        n_cells = len(self.metadata["obs"]["class"])
+        cond = np.ones(n_cells, dtype=np.uint8)
 
         if self.include_analysis:
             if "include_analysis" in self.metadata["obs"].keys():
                 cond *= (self.metadata["obs"]["include_analysis"] > 0)
                 print("only analyzing include_analysis = True")
-
-        idx = np.where(np.array(self.metadata["obs"]["SubID"]) == "PM-MS_55245")[0]
-        cond[idx] = 0
-        print(f"Removing SubID PM-MS_55245, number of samples removed {len(idx)}")
 
         if restrictions is not None:
             for k, v in restrictions.items():
@@ -57,6 +52,7 @@ class PLS:
 
         self.cell_idx = np.where(cond)[0]
         self.n_samples = len(self.cell_idx)
+        print(f"Number of samples: {self.n_samples}")
 
         for k in self.metadata["obs"].keys():
             self.metadata["obs"][k] = np.array(self.metadata["obs"][k])[self.cell_idx]
@@ -77,7 +73,7 @@ class PLS:
 
         if self.top_k_genes is not None:
             th = np.sort(self.metadata["var"]['percent_cells'])[-self.top_k_genes]
-            cond *= self.metadata["var"]['percent_cells'] > th
+            cond *= self.metadata["var"]['percent_cells'] >= th
             print(f"Top {self.top_k_genes} genes selected; threshold = {th:1.4f}")
 
         self.gene_idx = np.where(cond)[0]
@@ -106,6 +102,8 @@ class PLS:
 
     def cross_val_pls(self, n_components=10):
 
+        n_splits = len(self.splits.keys())
+
         pls = PLSRegression(n_components=n_components)
         y = np.hstack((
             np.reshape(self.metadata["obs"]["BRAAK_AD"], (-1, 1)),
@@ -124,7 +122,7 @@ class PLS:
             "Dementia": np.reshape(self.metadata["obs"]["Dementia"], (-1, 1)),
         }
 
-        for split_num in range(0, 20):
+        for split_num in range(0, n_splits):
             print(f"Split number {split_num}")
             train_idx_full = set(self.splits[split_num]["train_idx"])
             test_idx_full = set(self.splits[split_num]["test_idx"])
@@ -185,13 +183,10 @@ class ProcessData:
 
         self.obs_list = ["pred_BRAAK_AD", "pred_Dementia"]
         self.obs_from_metadata = [
-            "BRAAK_AD", "CERAD", "Dementia", "class", "subclass", "subtype", "SubID",
-            "include_analysis", "Age", "Sex", "Brain_bank", "barcode", "MCI", "Dementia_graded",
-            "CDRScore",
+            "BRAAK_AD", "CERAD", "Dementia", "class", "subclass",  "SubID", "include_analysis",
         ]
         self.donor_stats = [
-            "Sex", "Age", "Brain_bank", "Dementia", "BRAAK_AD", "pred_BRAAK_AD",
-            "pred_Dementia", "CERAD", "CDRScore",
+            "Dementia", "BRAAK_AD", "pred_BRAAK_AD", "pred_Dementia", "CERAD",
         ]
 
 
