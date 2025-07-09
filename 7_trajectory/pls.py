@@ -18,12 +18,21 @@ class PLS:
     from raw spike counts.
     Used for Supplementary Figure 15
     """
-    def __init__(self, meta_fn, data_path, splits_fn, restrictions, top_k_genes = 10_000):
+    def __init__(
+        self,
+        meta_fn,
+        data_path,
+        splits_fn,
+        restrictions,
+        top_k_genes = 10_000,
+        predictions = ["BRAAK_AD"],
+    ):
 
         self.remove_sex_chrom = True
         self.protein_coding_only = True
         self.include_analysis = True
         self.top_k_genes = top_k_genes
+        self.predictions = predictions
         self.splits = pickle.load(open(splits_fn, "rb"))
 
         self.data_path = data_path
@@ -105,11 +114,13 @@ class PLS:
         n_splits = len(self.splits.keys())
 
         pls = PLSRegression(n_components=n_components)
-        y = np.hstack((
-            np.reshape(self.metadata["obs"]["BRAAK_AD"], (-1, 1)),
-            # np.reshape(self.metadata["obs"]["Dementia"], (-1, 1)),
-            # np.reshape(adata.obs["CERAD"].values, (-1, 1)),
-        ))
+
+        y = []
+        for p in self.predictions:
+            y.append(np.reshape(self.metadata["obs"][p], (-1, )))
+        y = np.stack(y, axis=1)
+        print(f"Shape of y: {y.shape}")
+
         N = y.shape[0]
         y_valid = np.sum(y, axis=1) > -1
 
@@ -123,7 +134,6 @@ class PLS:
         }
 
         for split_num in range(0, n_splits):
-            print(f"Split number {split_num}")
             train_idx_full = set(self.splits[split_num]["train_idx"])
             test_idx_full = set(self.splits[split_num]["test_idx"])
 
@@ -135,41 +145,8 @@ class PLS:
             pls.fit(self.data[train_idx, :], y[train_idx, :])
 
             y_hat_split = pls.predict(self.data[test_idx, :])
-            self.results["pred_BRAAK_AD"][test_idx] = y_hat_split[:, 0]
-            # self.results["pred_Dementia"][test_idx] = y_hat_split[:, 1]
-
-    def cross_val_pls_pd(self, n_components=10):
-
-        k = "path_braak_lb_condensed_v3"
-
-        pls = PLSRegression(n_components=10)
-        y = np.hstack((
-            np.reshape(self.metadata["obs"][k], (-1, 1)),
-        ))
-        N = y.shape[0]
-        y_valid = np.sum(y, axis=1) > -99
-
-        self.y_hat = np.zeros(y.shape)
-        self.results = {
-            "cell_idx": self.cell_idx,
-            f"pred_{k}": np.zeros(N),
-            k: y[:, 0],
-        }
-
-        for split_num in range(0, 20):
-            print(f"Split number {split_num}")
-            train_idx_full = set(self.splits[split_num]["train_idx"])
-            test_idx_full = set(self.splits[split_num]["test_idx"])
-
-            train_idx = np.where(
-                np.isin(self.cell_idx, list(train_idx_full)) * y_valid
-            )[0]
-            test_idx = np.where(np.isin(self.cell_idx, list(test_idx_full)))[0]
-
-            pls.fit(self.data[train_idx, :], y[train_idx, :])
-
-            y_hat_split = pls.predict(self.data[test_idx, :])
-            self.results[f"pred_{k}"][test_idx] = y_hat_split[:, 0]
+            for n, p in enumerate(self.predictions):
+                self.results[f"pred_{p}"][test_idx] = y_hat_split[:, n]
 
 
 class ProcessData:
