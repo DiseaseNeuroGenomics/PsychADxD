@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 import pickle
 import copy
 import pandas as pd
@@ -15,6 +15,7 @@ class ModelResults:
         self,
         data_fn: str,
         meta_fn: str,
+        obs_list: List = ["pred_BRAAK_AD", "pred_Dementia"],
         gene_pathway_fn: Optional[str] = None,  # dict of GO BP pathways
         gene_count_prior: Optional[float] = None,
         include_analysis_only: bool = True,
@@ -29,7 +30,7 @@ class ModelResults:
         self.gene_pathways = pickle.load(open(gene_pathway_fn, "rb")) if gene_pathway_fn is not None else None
         self.convert_apoe()  # currently not used in the analysis
 
-        self.obs_list = ["pred_BRAAK_AD", "pred_Dementia"]
+        self.obs_list = obs_list
         self.n_genes = len(self.meta["var"]["gene_name"])
         self.gene_names = self.meta["var"]["gene_name"]
 
@@ -124,6 +125,10 @@ class ModelResults:
         for n, fn in enumerate(fns):
             z = pickle.load(open(fn, "rb"))
 
+            for k in self.obs_list:
+                if isinstance(z[k], list):
+                    z[k] = np.concatenate(z[k], axis=0)
+
             if n == 0:
                 x = copy.deepcopy(z)
             else:
@@ -164,11 +169,9 @@ class ModelResults:
                     x_new["donor_px_r"][k] += x[n]["donor_px_r"][k] / n_models
 
         adata = self.create_single_anndata(x_new)
-        print("HERE", len(adata))
         if cell_restrictions is not None:
             for k, v in cell_restrictions.items():
                 adata = adata[adata.obs[k] == v]
-                print("HERE1", k, v, len(adata))
 
         return adata
 
