@@ -1,7 +1,5 @@
 # 7_trajectory: analysis on disease trajectory  
 
-Note: we borrowed heavily from https://github.com/tabdelaal/scVI/blob/master/scvi/models/  
-
 ### Requirements  
 PyTorch and PyTorch Lightning (https://lightning.ai/docs/pytorch/stable/).  
 Conda environment used for model training given in vae.yaml
@@ -12,7 +10,7 @@ from create_dataset import create_dataset
 create_dataset(source_paths, target_path)  
 ```
 source_paths is a list of h5ad files (e.g. ["dataset1.h5ad", "dataset2.h5ad"])  
-target_path is the directory where the gene data (.dat file) and metadata (.pkl file) will be saved 
+target_path is the directory where the gene data (numpy memmap .dat file) and metadata (.pkl file) will be saved 
 
 ### Step 2 - Create train test splits
 ```
