@@ -346,7 +346,7 @@ class CellTrajectories:
 
         f, ax = plt.subplots(1, 1, figsize=(3.75, 3))
 
-        i = np.where(np.array(self.gene_names ) == "NAV2")[0][0]
+        i = np.where(np.array(self.gene_names ) == gene_name)[0][0]
         y = self.cell_traj[cell_name]
         ax.plot(y["pred_braak"], y["gene_exp"][:, i], 'k.', markersize=3, label="Donor-averaged expression")
         ax.plot(y["pred_braak_traj"], y["gene_exp_traj"][:, i], 'r.', markersize=4, label="Smoothed fit")
