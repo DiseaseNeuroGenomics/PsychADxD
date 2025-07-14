@@ -7,8 +7,6 @@ This repository contains code and instructions for performing genetic correlatio
 - **LDSC (Linkage Disequilibrium Score Regression)** is used to compute genetic correlations between neurodegenerative and psychiatric disorders using GWAS summary statistics.
 - **scDRS (single-cell Disease Relevance Score)** is used to assess cell-type enrichment of disease-associated gene sets in single-cell transcriptomic data.
 
----
-
 ## 1. LDSC: Genetic Correlation Analysis
 
 ### Installation
@@ -31,6 +29,6 @@ bunzip2 w_hm3.snplist.bz2
 ### Required Libraries
 
 Install the following packages:
-	•	scdrs, pegasus, scanpy, anndata
-	•	numpy, pandas, seaborn, matplotlib
-	•	synapseclient, scipy, pynndescent
+- scdrs, pegasus, scanpy, anndata
+- numpy, pandas, seaborn, matplotlib
+- synapseclient, scipy, pynndescent
