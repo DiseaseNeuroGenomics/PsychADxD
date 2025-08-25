@@ -16,18 +16,16 @@ class ModelResults:
         data_fn: str,
         meta_fn: str,
         obs_list: List = ["pred_BRAAK_AD", "pred_Dementia"],
-        gene_pathway_fn: Optional[str] = None,  # dict of GO BP pathways
         gene_count_prior: Optional[float] = None,
         include_analysis_only: bool = True,
         load_gene_count: bool = False,
         normalize_gene_counts: bool = False,
         log_gene_counts: bool = False,
-        add_gene_scores: bool = False,
+        add_gene_scores: bool = True,
     ):
 
         self.data_fn = data_fn
         self.meta = pickle.load(open(meta_fn, "rb"))
-        self.gene_pathways = pickle.load(open(gene_pathway_fn, "rb")) if gene_pathway_fn is not None else None
         self.convert_apoe()  # currently not used in the analysis
 
         self.obs_list = obs_list
@@ -94,6 +92,8 @@ class ModelResults:
         k = self.obs_list[0]
         n = z[k].shape[0]
         latent = np.zeros((n, 1), dtype=np.uint8)  # dummy variable to create AnnData
+        self.gene_idx = np.where(self.meta["var"]["protein_coding"])[0]
+
         a = ad.AnnData(latent)
 
         for m, k in enumerate(self.obs_list):
@@ -249,13 +249,6 @@ class ModelResults:
         for k in self.obs_list:
             adata.uns[k] = []
 
-        if self.gene_pathways is not None:
-            adata.uns["go_bp_pathways"] = []
-            adata.uns["go_bp_ids"] = []
-            for k, v in self.gene_pathways.items():
-                adata.uns["go_bp_pathways"].append(v["pathway"])
-                adata.uns["go_bp_ids"].append(k)
-
         adata.uns["donors"] = []
         for subid in np.unique(adata.obs["SubID"]):
             adata.uns["donors"].append(subid)
@@ -268,11 +261,9 @@ class ModelResults:
     def add_donor_stats(self, adata, add_gene_scores=True):
 
         n_donors = len(adata.uns["donors"])
-        if self.gene_pathways is not None:
-            n_pathways = len(self.gene_pathways)
-            adata.uns[f"donor_pathway_means"] = np.zeros((n_donors, n_pathways), dtype=np.float32)
         if add_gene_scores:
-            adata.uns[f"donor_gene_means"] = np.zeros((n_donors, self.n_genes), dtype=np.float32)
+            adata.uns[f"donor_gene_means"] = np.zeros((n_donors, len(self.gene_idx)), dtype=np.float32)
+            adata.uns[f"gene_name"] = np.array(self.gene_names)[self.gene_idx]
 
         adata.uns[f"donor_cell_count"] = np.zeros((n_donors,), dtype=np.float32)
 
@@ -282,7 +273,6 @@ class ModelResults:
         for m, subid in enumerate(adata.uns["donors"]):
             a = adata[adata.obs["SubID"] == subid]
             count = 1e-6  # to prevent 1 / 0 errors
-            go_scores = {}
 
             for n, i in enumerate(a.obs["cell_idx"]):
                 if add_gene_scores:
@@ -290,17 +280,8 @@ class ModelResults:
                         self.data_fn, dtype='uint8', mode='r', shape=(self.n_genes,), offset=i * self.n_genes,
                     ).astype(np.float32)
                     data = self.normalize_data(data)
-                    adata.uns[f"donor_gene_means"][m, :] += data
+                    adata.uns[f"donor_gene_means"][m, :] += data[self.gene_idx]
                 count += 1
-
-                if self.gene_pathways is not None:
-                    for go_id in self.gene_pathways.keys():
-                        go_idx = self.gene_pathways[go_id]["gene_idx"]
-                        gene_exp = np.sum(np.log1p(data[go_idx]))
-                        if not go_id in go_scores.keys():
-                            go_scores[go_id] = [gene_exp]
-                        else:
-                            go_scores[go_id].append(gene_exp)
 
                 for k in self.donor_stats:
                     if "pred_" in k:
@@ -315,10 +296,6 @@ class ModelResults:
                         adata.uns[f"donor_{k}"][m] = float(a.obs[f"{k}"][n] == "MSSM")
                     else:
                         adata.uns[f"donor_{k}"][m] = a.obs[f"{k}"][n]
-
-            if self.gene_pathways is not None:
-                for n, go_id in enumerate(self.gene_pathways.keys()):
-                    adata.uns[f"donor_pathway_means"][m, n] = np.mean(go_scores[go_id])
 
             adata.uns[f"donor_cell_count"][m] = count
             if add_gene_scores:
