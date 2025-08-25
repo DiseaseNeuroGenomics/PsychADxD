@@ -283,7 +283,6 @@ class CellTrajectories:
         edge = 0,
     ):
 
-        """XXXXXXXXXXXXXX"""
 
         self.data_fns = data_fns
         self.cell_names = cell_names
@@ -310,14 +309,17 @@ class CellTrajectories:
             idx = (cell_count >= self.min_cell_count)
             pred_dementia = adata.uns["donor_pred_Dementia"][idx]
             pred_braak = adata.uns["donor_pred_BRAAK_AD"][idx]
+            sex = adata.uns["donor_Sex"][idx]
+
 
             idx_sort = np.argsort(pred_braak)
             pred_braak = pred_braak[idx_sort]
             pred_dementia = pred_dementia[idx_sort]
+            sex = sex[idx_sort]
             donor_gene_means = adata.uns["donor_gene_means"][idx][idx_sort, :]
             gamma = self.alpha / np.var(pred_braak)
 
-            self.cell_traj[name] = {"pred_braak": pred_braak, "gene_exp": donor_gene_means}
+            self.cell_traj[name] = {"pred_braak": pred_braak, "gene_exp": donor_gene_means, "sex": sex}
 
             self.cell_traj[name]["pred_braak_traj"], self.cell_traj[name]["gene_exp_traj"] = calculate_trajectories_single(
                 pred_braak,
@@ -337,6 +339,7 @@ class CellTrajectories:
             if self.edge > 0:
                 self.cell_traj[name]["pred_braak_traj"] = self.cell_traj[name]["pred_braak_traj"][self.edge:-self.edge]
                 self.cell_traj[name]["gene_exp_traj"] = self.cell_traj[name]["gene_exp_traj"][self.edge:-self.edge, :]
+                self.cell_traj[name]["sex"] = self.cell_traj[name]["sex"][self.edge:-self.edge, :]
                 self.cell_traj[name]["resilience_traj"] = self.cell_traj[name]["resilience_traj"][self.edge:-self.edge, :]
 
             pca = PCA(n_components=n_components)
@@ -1281,26 +1284,56 @@ class ResilienceVisualization:
     requires R_scripts/zenith_donor.R to perform pathway enrichment for each donor
     """
 
-    def __init__(self, data_fns, save_fns, cell_names):
+    def __init__(self, data_fns, save_fns, cell_names, min_cell_count = 5):
 
+        self.min_cell_count = min_cell_count
         self.data_fns = data_fns
         self.save_fns = save_fns
         self.cell_names = cell_names
 
         self._add_braak_dementia()
 
+    def _get_elibgible_donors(self):
 
-    def _add_braak_dementia(self):
+        # discover which donors have at least the minimum number of cells for all eight cell classes
+        donor_cell_counts = {}
+        for fn in self.data_fns:
+            adata = sc.read_h5ad(fn, "r")
+
+            for donor, n in zip(adata.uns["donors"], adata.uns["donor_cell_count"]):
+                if not donor in donor_cell_counts.keys():
+                    donor_cell_counts[donor] = [n]
+                else:
+                    donor_cell_counts[donor].append(n)
+
+        self.eligible_donors = []
+        for donor, counts in donor_cell_counts.items():
+            if np.sum(np.stack(counts) >= self.min_cell_count) == len(self.data_fns):
+                self.eligible_donors.append(donor)
+
+        print(f"Number of eligible donors: {len(self.eligible_donors)}")
+
+
+    def _add_braak_dementia(self, common_donors = True):
 
         self.data_bd = {}
         self.donor_index = {}
+
+        if common_donors:
+            self._get_elibgible_donors()
+
         for fn, cell_name in zip(self.data_fns, self.cell_names):
             self.data_bd[cell_name] = {}
             adata = sc.read_h5ad(fn, "r")
-            idx = np.where(adata.uns["donor_cell_count"] >= 5)[0]
+            if common_donors:
+                idx = [n for n, d in enumerate(adata.uns["donors"]) if d in self.eligible_donors]
+            else:
+                idx = np.where(adata.uns["donor_cell_count"] >= 5)[0]
             self.donor_index[cell_name] = idx
             self.data_bd[cell_name]["braak"] = adata.uns["donor_pred_BRAAK_AD"][idx]
             self.data_bd[cell_name]["dementia"] = adata.uns["donor_pred_Dementia"][idx]
+            self.data_bd[cell_name]["real_braak"] = adata.uns["donor_BRAAK_AD"][idx]
+            self.data_bd[cell_name]["real_dementia"] = adata.uns["donor_Dementia"][idx]
 
     def add_zenith_results(self, zenith_out_dir):
 
@@ -1434,10 +1467,6 @@ def calculate_trajectory_residuals(pred_x, pred_y, gene_vals, gamma, neighbors=N
     """Used to determine whether genes are protective or damaging
     pred_x = e.g. predicted Braak values
     pred_y = e.g. predicted Dementia values"""
-
-    # in case these are actual values
-    pred_x[pred_x < -1] = np.nan
-    pred_y[pred_y < -1] = np.nan
 
     resids = []
 
