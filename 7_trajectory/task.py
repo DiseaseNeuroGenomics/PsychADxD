@@ -13,6 +13,8 @@ import torch.nn.functional as F
 from torchmetrics import MetricCollection, ExplainedVariance
 from torchmetrics.classification import Accuracy
 
+import weightwatcher as ww
+
 from distributions import (
     ZeroInflatedNegativeBinomial,
     NegativeBinomial,
@@ -57,6 +59,7 @@ class CellPrediction(pl.LightningModule):
 
         self._cell_properties_metrics()
         self._reset_results_dict()
+        self.gene_means = None
         self.train_step = 0
         self.source_code_copied = False
 
@@ -80,7 +83,7 @@ class CellPrediction(pl.LightningModule):
         self,
         perturb_gene_names: Optional[Dict[str, List]] = None,
         add_random_set: bool = True,
-        n_random_sets: int = 30,
+        n_random_sets: int = 50,
     ):
         """Used to infer how gene perturbations affect model predictions, not used in Capstone"""
 
@@ -190,7 +193,7 @@ class CellPrediction(pl.LightningModule):
         self._save_predictions(cell_pred, cell_targets, cell_mask, cell_idx)
         loss = self._cell_loss(cell_pred, cell_targets, cell_mask)
 
-        if len(self.perturb_gene_names) > 0:
+        if len(self.perturb_gene_names) > 0  and self.current_epoch >= 999:
             self._generate_perturbations(batch)
 
         return loss
@@ -204,8 +207,13 @@ class CellPrediction(pl.LightningModule):
             gene_vals_perturb_up = gene_vals.detach().clone()
             gene_vals_perturb_down = gene_vals.detach().clone()
             for i in self.perturb_gene_idx[p]:
-                gene_vals_perturb_up[:, i] = gene_vals_perturb_up[:, i] + 1
-                gene_vals_perturb_down[:, i] = 0.0
+                #gene_vals_perturb_up[:, i] = gene_vals_perturb_up[:, i] + 1
+                #gene_vals_perturb_down[:, i] = 0.0
+                gene_vals_perturb_up[:, i] = gene_vals_perturb_up[:, i] + torch.poisson(self.gene_means[i])
+                gene_vals_perturb_down[:, i] = torch.clip(
+                    gene_vals_perturb_down[:, i] - torch.poisson(self.gene_means[i]), min=0,
+                )
+
 
             cell_perturb_up, _ = self.network(gene_vals_perturb_up, batch_labels, batch_mask)
             cell_perturb_down, _ = self.network(gene_vals_perturb_down, batch_labels, batch_mask)
@@ -246,6 +254,12 @@ class CellPrediction(pl.LightningModule):
             pickle.dump(self.results, open(fn, "wb"))
 
         self._reset_results_dict()
+
+        watcher = ww.WeightWatcher(model=self.network)
+        details = watcher.analyze()
+        summary = watcher.get_summary(details)
+        print(details)
+        print(summary)
 
     def _save_predictions(self, cell_pred, cell_targets, cell_mask, cell_idx):
 
@@ -296,6 +310,11 @@ class CellPrediction(pl.LightningModule):
         gene_vals, cell_prop_vals, cell_mask, batch_labels, batch_mask, _, group_idx, _ = batch
         cell_pred, _ = self.network(gene_vals, batch_labels, batch_mask)
         loss = self._cell_loss(cell_pred, cell_prop_vals, cell_mask)
+
+        if self.gene_means is None:
+            self.gene_means = gene_vals.mean(dim=0)
+        else:
+            self.gene_means = 0.99 * self.gene_means + 0.01 * gene_vals.mean(dim=0)
 
         return loss
 
@@ -353,6 +372,10 @@ class CellPrediction(pl.LightningModule):
 
 # define the LightningModule
 class LitVAE(pl.LightningModule):
+
+    """To be used when using the VAE architecture.
+    THe VAE was used for the original biorxiv submission, but was not used in the final publication"""
+
     def __init__(
         self,
         network,
