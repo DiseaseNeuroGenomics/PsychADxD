@@ -2,7 +2,7 @@
 
 ### Requirements  
 PyTorch and PyTorch Lightning (https://lightning.ai/docs/pytorch/stable/).  
-Conda environment used for model training given in vae.yaml
+Conda environment used for model training given in env.yaml
 
 ### Step 1 - Create the dataset used for model training and analysis 
 ```
