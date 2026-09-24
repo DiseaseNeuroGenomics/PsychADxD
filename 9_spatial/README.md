@@ -32,9 +32,10 @@ python labelSubclass_plotSpatial.py -i "/path/to/extracted/data/"analysis/final.
 python labelSubtype_plotSpatial.py -i "/path/to/extracted/data/"analysis/xenium_annotated_subclass.h5ad -r "/path/to/radc/h5ad"
 
 # automatically identify cortical domains, calculate spatial densities, make Fig. S4 e, f, k
-python labelID_densityAnalysis.py -i "/path/to/extracted/data/"analysis/xenium_annotated_subtype.h5ad -l "path/to/layer/description/csv"
+python layerID_densityAnalysis.py -i "/path/to/extracted/data/"analysis/xenium_annotated_subtype.h5ad -l "path/to/layer/description/csv"
 ```
 
 ## Other notes
 Each of the above command line calls can be modified and customized substantially, and individual functions may be imported from the pipelines to be used in independent analyses.
 Command line calls and functions contain comments, explanations and help texts to support such use.
+In particular, note that the leiden clustering step in the first script is stochastic and may lead to slightly different results in independent runs. While this doesn't change results substantially, it may be best to consider increasing the "--leiden_res" parameter and/ or lower the "--min_fraction" parameter to get the cleanest QC results. The default parameters are equivalent to the analysis run in the paper, but the random seed used was unfortunately not retained.
