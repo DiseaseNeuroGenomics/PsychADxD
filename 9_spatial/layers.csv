@@ -1,0 +1,12 @@
+Layer,Cell_type,Level
+WM,Oligo,class
+L2-3,EN_L2_3_IT,subclass
+L3-5,EN_L3_5_IT_1,subclass
+L3-5,EN_L3_5_IT_2,subclass
+L3-5,EN_L3_5_IT_3,subclass
+L3-5,EN_L5_ET,subclass
+L5-6,EN_L6_IT_1,subclass
+L5-6,EN_L6_IT_2,subclass
+L5-6,EN_L6_CT,subclass
+L5-6,EN_L6B,subclass
+L5-6,EN_L5_6_NP,subclass

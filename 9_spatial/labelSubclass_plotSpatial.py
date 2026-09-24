@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import argparse
 import sys
-from typing import Callable
+from typing import Callable, Literal
 sys.path.append('./')
 from run_scanvi import run_scanvi
 
@@ -48,10 +48,52 @@ def subset_by_label(adata:sc.AnnData, label_col:str, label_vals:str|list[str],
         return adata_subset
     
 
+def unify_series_dtypes(base_series: pd.Series, 
+                        incoming_series: pd.Series, 
+                        cast_as: str | pd.Series | None = None
+                        ) -> tuple[pd.Series, pd.Series]:
+    """
+    Safely unifies the data types and categories of two pandas Series.
+    If categorical, unions their available categories so values can be
+    interchanged or combined without triggering a ValueError.
+    Returns:
+        tuple: (updated_base_series, updated_incoming_series)
+    """
+    # Determine the target data type
+    if cast_as is not None:
+        target_dtype = cast_as
+    else:
+        target_dtype = base_series.dtype
+    # Check if we need to treat this as a categorical operation
+    is_categorical = (
+        isinstance(target_dtype, pd.CategoricalDtype) or 
+        target_dtype == "category" or 
+        isinstance(base_series.dtype, pd.CategoricalDtype)
+    )
+
+    if is_categorical:
+        # Extract existing categories safely
+        base_cats = base_series.cat.categories if hasattr(base_series, "cat") else []
+        incoming_cats = incoming_series.astype("category").cat.categories
+        # Merge to get a complete list of unique categories
+        combined_cats = pd.Index(base_cats).union(incoming_cats)
+        cat_dtype = pd.CategoricalDtype(categories=combined_cats)
+        # Apply the expanded categorical type to both series
+        updated_base = base_series.astype(cat_dtype)
+        updated_incoming = incoming_series.astype(cat_dtype)
+    else:
+        # For non-categorical data, standard type casting is safe
+        updated_base = base_series.astype(target_dtype)
+        updated_incoming = incoming_series.astype(target_dtype)
+        
+    return updated_base, updated_incoming
+
+
 def import_metadata(source_adata:sc.AnnData, source_col:str,
                     target_adata:sc.AnnData, target_col:str|None=None,
                     index_conversion:Callable|None=None,
-                    default_val=np.nan, cast_as=None
+                    default_val=np.nan, cast_as=None,
+                    overwrite_mode: Literal["none", "values", "force"]="none"
                    ) -> None:
     """
     Import a metadata column from source to target adata,
@@ -61,20 +103,36 @@ def import_metadata(source_adata:sc.AnnData, source_col:str,
     if target_col is None:
         target_col = source_col
     if index_conversion is not None:
-        source_data.index = [index_conversion(idx)
-                             for idx in source_data.index]
-    subset_idxs = source_data.index.intersection(target_adata.obs.index)
-    source_data = source_data.loc[subset_idxs]
-    new_col = pd.Series(default_val, index=target_adata.obs.index)
-    new_col.loc[source_data.index] = source_data
-    if cast_as is not None:
-        new_col = new_col.astype(cast_as)
-    target_adata.obs[target_col] = new_col
+        source_data.index = source_data.index.map(index_conversion)
+    imported_series = source_data.reindex(target_adata.obs_names)
+    target_exists = target_col in target_adata.obs.columns
+    # ignore existing values in target
+    if overwrite_mode == "force" or not target_exists:
+        new_col = imported_series.fillna(default_val)
+        if cast_as is not None:
+            new_col = new_col.astype(cast_as)
+        target_adata.obs[target_col] = new_col
+        return None
+    # overwrite_mode is either 'none' or 'values'
+    target_data, imported_series = unify_series_dtypes(
+        target_adata.obs[target_col].copy(), imported_series, cast_as)
+    # Apply the specific overwrite logic
+    if overwrite_mode == "none":  # only fill missing data
+        is_missing = target_data.isna() | (target_data == default_val)
+        target_data.loc[is_missing] = imported_series.loc[is_missing]
+    elif overwrite_mode == "values":  # keep original, but overwrite if overlaps
+        has_imported_val = imported_series.notna()
+        target_data.loc[has_imported_val] = imported_series.loc[has_imported_val]
+    # minor cleanup
+    if isinstance(target_data.dtype, pd.CategoricalDtype):
+        target_data = target_data.cat.remove_unused_categories()
+
+    target_adata.obs[target_col] = target_data
     
 
 def spatial_plot(adata:sc.AnnData, plot_obs:str,
                  pal:dict|None=None, title:str|None=None,
-                 legend_loc:str|None=None,
+                 legend_params:dict|None=None,
                  aspect:str|None=None,
                  xticks:list[float]|None=None,
                  xlabels:list[str]|None=None,
@@ -99,8 +157,8 @@ def spatial_plot(adata:sc.AnnData, plot_obs:str,
     if title is None:
         title = plot_obs
     ax.set_title(title)
-    if legend_loc is not None:
-        sns.move_legend(ax, legend_loc)
+    if legend_params is not None:
+        sns.move_legend(ax, **legend_params)
     if aspect is not None:
         ax.set_aspect(aspect)
     if xticks is not None:
@@ -147,7 +205,7 @@ def arg_parser() -> argparse.ArgumentParser:
         help='Batch key for scANVI in reference AnnData.'
         )
     parser.add_argument(
-        '--scanvi_seed', type=int, default=0,
+        '--scvi_seed', type=int, default=0,
         help='Random seed for scANVI.'
         )
     parser.add_argument(
@@ -162,12 +220,16 @@ def arg_parser() -> argparse.ArgumentParser:
         '--scanvi_max_epochs', type=int, default=50,
         help='Maximum number of epochs for scANVI.'
         )
+    parser.add_argument('--scanvi_overwrite', action='store_true',
+                        help="Whether to use saved scANVI model files"
+                             "(False; default) if they are found, or "
+                             "rerun scANVI and overwrite them")
     parser.add_argument(
         '-s', '--sample_col', type=str, default='sample_id',
         help='Column name for subsetting to a sample t in Xenium AnnData.'
         )
     parser.add_argument(
-        '--plot_sample', type=str, default='6799_Region3_1495',
+        '--plot_sample', type=str, default='6799_R3_1495',
         help='Xenium sample to plot.'
         )
     parser.add_argument(
@@ -233,7 +295,7 @@ def main() -> int:
             scvi_max_epochs=args.scvi_max_epochs,
             scanvi_max_epochs=args.scanvi_max_epochs,
             scvi_seed=args.scvi_seed,
-            overwrite=True,
+            overwrite=args.scanvi_overwrite,
             ret_style='query'
             )
         # save new data and remove run-specific query and reference
@@ -252,7 +314,7 @@ def main() -> int:
         save_dir.joinpath(f"xenium_annotated_{args.scanvi_label}.h5ad"))
     # spatial plots for single sample
     adata_sample = adata_xenium[
-        adata_xenium.obs[args.sample_col==args.plot_sample, :]
+        adata_xenium.obs[args.sample_col]==args.plot_sample, :
         ].copy()
     sns_kwargs = dict(s=args.dot_size, linewidth=args.line_width)
     # plot Figure 2B (spatial distribution of class/ parent category)
@@ -264,7 +326,9 @@ def main() -> int:
         figname = "Figure_2B"
     spatial_plot(adata_sample, plot_obs=f"{args.subset_col}_scanvi",
                  pal=pal_dict, title=args.subset_col,
-                 legend_loc="bottom right", aspect='equal', xticks=[],
+                 legend_params=dict(loc="center right",
+                                    bbox_to_anchor=(-0.05, 0.5)),
+                 aspect='equal', xticks=[],
                  yticks=[], save_path=plot_dir.joinpath(f"{figname}.pdf"),
                  **sns_kwargs)
     # plot subclass (or other transferred label) spatially for selected sample
@@ -297,10 +361,16 @@ def main() -> int:
                 figname = "Figure_S4I"
         spatial_plot(adata_plot, plot_obs=f"{args.scanvi_label}_scanvi",
                      pal=spectral_pal, title=f"{args.scanvi_label}\n{val}",
-                     legend_loc="bottom right", aspect='equal', xticks=[],
+                     legend_params=dict(loc="center right",
+                                        bbox_to_anchor=(-0.05, 0.5)),
+                     aspect='equal', xticks=[],
                      yticks=[], save_path=plot_dir.joinpath(f"{figname}.pdf"),
                      **sns_kwargs)
     # remove remaining temp files
     for val in args.subset_vals:
         os.remove(scanvi_dir.joinpath(f"query_{val}_annotated.h5ad"))
     return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

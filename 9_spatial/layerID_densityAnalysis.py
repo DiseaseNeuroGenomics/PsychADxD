@@ -4,10 +4,12 @@ import pandas as pd
 import numpy as np
 from skimage.filters import gaussian
 import os
-from typing import Literal, Callable, Any
+from typing import Literal, Callable, Any, List
 import matplotlib.pyplot as plt
 import argparse
 from pathlib import Path
+import sys
+import seaborn as sns
 sys.path.append('./')
 from labelSubclass_plotSpatial import spatial_plot
 
@@ -33,13 +35,14 @@ def get_nn_ind_mat(adata:sc.AnnData, n_nbs:int=15) -> np.ndarray:
     assert all(
         neighbor_indices[0].reshape(mat_shape).std(axis=1) == 0
     )
-    # get matrix where each row 'i' is the 15 NN indexes of the 'i'th cell
+    # get matrix where each row 'i' is the 'n_nb' NN indexes of the 'i'th cell
     nn_mat = neighbor_indices[1].reshape(mat_shape)
     return nn_mat
 
 
+ANNOT_HIERARCHY = ["class_scanvi", "subclass_scanvi", "subtype_scanvi"]
 def get_ncv(adata:sc.AnnData, annot_obs:str, nn_ind_mat:np.ndarray|None=None,
-            n_nbs:int=15) -> pd.DataFrame:
+            n_nbs:int=15, annot_hierarchy:List|None=None) -> pd.DataFrame:
     """
     For each cell, count number of nearest neighbors in each of the categories
     of adata.obs[annot_obs], generated the "neighborhood composition vector"
@@ -47,11 +50,34 @@ def get_ncv(adata:sc.AnnData, annot_obs:str, nn_ind_mat:np.ndarray|None=None,
     """
     if nn_ind_mat is None:
         nn_ind_mat = get_nn_ind_mat(adata, n_nbs=n_nbs)
-    nn_annot = pd.Series(
-        [adata.obs[annot_obs].iloc[row] for row in nn_ind_mat],
-        index=adata.obs.index
-    )
-    nn_annot_counts = nn_annot.apply(pd.Series.value_counts)
+    # make sure annotation avoids discounting cells
+    # by filling in missing values from lower granularity annotations
+    if annot_hierarchy is None:
+        annot_hierarchy = ANNOT_HIERARCHY
+    if annot_obs not in annot_hierarchy:
+        use_obs = annot_obs
+    else:
+        use_obs = 'temp_annot'
+        new_col = adata.obs[annot_obs].astype(object)
+        hierarchy_idx = annot_hierarchy.index(annot_obs)
+        for i in range(hierarchy_idx - 1, -1, -1):
+            missing = new_col.isna()
+            if missing.sum() == 0:
+                break
+            import_col = adata.obs[annot_hierarchy[i]].astype(object)
+            new_col.loc[missing] = import_col.loc[missing]
+        adata.obs[use_obs] = new_col.astype("category")
+    expected_categories = adata.obs[use_obs].dropna().unique()
+    # get nearest neighbor annotations and quantify
+    nn_annot_mat = adata.obs[use_obs].to_numpy()[nn_ind_mat]
+    flat_annots = nn_annot_mat.ravel()
+    flat_indices = np.repeat(adata.obs_names, n_nbs)
+    nn_annot_counts = pd.crosstab(flat_indices, flat_annots).\
+        reindex(index=adata.obs_names,
+                columns=expected_categories,
+                fill_value=0)
+    if use_obs == 'temp_annot':
+        del adata.obs['temp_annot']
     return nn_annot_counts
 
 
@@ -292,7 +318,7 @@ def domain_call(adata:sc.AnnData, obs_col:str, pixel_size_init:float=25.,
     return final_mask
 
 
-def assign_cell(obs_row:pd.Series[bool],
+def assign_cell(obs_row:pd.Series,  # a Series of bools
                 conflict_resolution:Literal['unique', 'sum']='unique',
                 unassigned_label:str='Unassigned',
                 ) -> str:
@@ -300,7 +326,11 @@ def assign_cell(obs_row:pd.Series[bool],
     if n_assignments == 0:
         return unassigned_label
     def layer_name(nm):
-        return nm.replace('NNabundance_', '').replace('_count_mask_final', '')
+        parts = nm.replace('NNabundance_', '').split('_')
+        last_part = [i for i in range(len(parts)) if parts[i].startswith('NN')]
+        if len(last_part) != 1:
+            raise ValueError(f"Unable to parse layer name {nm}")
+        return '_'.join(parts[:last_part[0]])
     if n_assignments == 1:
         return layer_name(obs_row.idxmax())
     if conflict_resolution == 'unique':
@@ -335,7 +365,7 @@ def calculate_area(adata:sc.AnnData, obs_col:str, obs_val:Any, sample_obs:str,
             )) * pixel_size**2
             for sample in adata_temp.obs[sample_obs].unique()
         }
-    return pd.Series(samples_areas, name=obs_val).astype(float)
+    return pd.Series(samples_areas, name=obs_val).astype(float).fillna(0)
 
 
 def total_area(adata:sc.AnnData, sample_obs:str, pixel_size:float,
@@ -356,7 +386,7 @@ def total_area(adata:sc.AnnData, sample_obs:str, pixel_size:float,
             return_cell_counts=True
         )
         samples_areas[sample] = np.sum(cell_counts) * pixel_size**2
-    return pd.Series(samples_areas, name=name).astype(float)
+    return pd.Series(samples_areas, name=name).astype(float).fillna(0)
 
 
 def calculate_densities(adata:sc.AnnData, annot_obs:str, sample_obs:str,
@@ -372,9 +402,10 @@ def calculate_densities(adata:sc.AnnData, annot_obs:str, sample_obs:str,
     columns for each layer.
     """
     # get counts per sample and layer
+    adata_temp = adata
     if select_obs is not None and select_val is not None:
-        adata = adata[adata.obs[select_obs] == select_val, :].copy()
-    df = adata.obs[[sample_obs, layer_obs, annot_obs]].copy()
+        adata_temp = adata[adata.obs[select_obs] == select_val, :].copy()
+    df = adata_temp.obs[[sample_obs, layer_obs, annot_obs]].copy()
     df['sample_layer'] = df.apply(
         lambda row: '_'.join([row[sample_obs], row[layer_obs]]), axis=1)
     sample_layer_annot_counts = pd.crosstab(df['sample_layer'], df[annot_obs])
@@ -424,9 +455,8 @@ def plot_layer_densities(density_df:pd.DataFrame,
     statistical significance (as in Figures S4E-F)
     """
     from scipy.stats import wilcoxon
-    import seaborn as sns
     # parse stacked column names
-    sample_col, layer_col, annot_col, dens_col = density_df.columns
+    _, layer_col, annot_col, dens_col = density_df.columns
     # rename layer - this is how it will appear in the legend
     density_df[layer_legend] = density_df[layer_col]
     # original densities are nuclei/um^2; rescaling by 1e6 converts to 1/mm^2
@@ -451,11 +481,11 @@ def plot_layer_densities(density_df:pd.DataFrame,
             test_res = wilcoxon(
                 x=density_df.loc[
                     (density_df[annot_col]==group) & (density_df[layer_col]==layer1),
-                    layer_col
+                    dens_col
                     ].sort_index(),
                 y=density_df.loc[
                     (density_df[annot_col]==group) & (density_df[layer_col]==layer2),
-                    layer_col
+                    dens_col
                     ].sort_index(),
                 alternative='two-sided',
                 method='exact'
@@ -507,7 +537,7 @@ def arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--annot_col', type=str, default='subclass_scanvi',
                         help='Name of the column in adata.obs used for layer '
                              'annotation')
-    parser.add_argument('--dens_cols', type=str, margs='+',
+    parser.add_argument('--dens_cols', type=str, nargs='+',
                         default=['subclass_scanvi', 'subtype_scanvi'],
                         help='Name of columns in adata.obs to calculate '
                              'density for')
@@ -543,7 +573,7 @@ def arg_parser() -> argparse.ArgumentParser:
                              'sample, all layers must occupy at least this '
                              'fraction of the total area occupied by cells.')
     parser.add_argument(
-        '--plot_sample', type=str, default='6799_Region3_1495',
+        '--plot_sample', type=str, default='6799_R3_1495',
         help='Xenium sample to plot spatially.'
         )
     parser.add_argument(
@@ -567,7 +597,7 @@ def main() -> int:
     # save directories
     if args.save_dir is None:
         args.save_dir = Path(
-            os.path.dirname(args.xenium_fl)).joinpath("analysis")
+            os.path.dirname(args.xenium_fl))
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     plot_dir = save_dir.joinpath("plots")
@@ -588,7 +618,7 @@ def main() -> int:
         ncv_df = get_ncv(adata_sample, args.annot_col, n_nbs=args.n_neighbors)
         mask_cols = []
         for layer in layers:
-            cols = layer_df.loc[layer].tolist()
+            cols = layer_df.loc[[layer]].iloc[:, 0].tolist()
             ncv_df[layer] = ncv_df.loc[:, cols].sum(axis=1)
             layer_col = f"{layer}_NN{args.n_neighbors}_count"
             mask_col = f"{layer_col}_mask_final"
@@ -602,16 +632,18 @@ def main() -> int:
         # combine to single assignment
         adata_sample.obs[args.layer_obs] = adata_sample.obs[mask_cols]. \
             apply(assign_cell, axis=1,
-                  conflict_resolution=args.conflict_resolution)
+                  conflict_resolution=args.conflict_resolution
+                  ).astype("category")
     adata_xenium.obs[args.layer_obs] = pd.concat([
-        adata_sample.obs[args.layer_obs]
-        for adata_sample in adata_samples.values()])
+        adata_sample.obs[args.layer_obs].astype(str)
+        for adata_sample in adata_samples.values()]).astype("category")
     # save adata
     adata_xenium.write_h5ad(save_dir.joinpath("xenium_annotated_layers.h5ad"))
     # calculate densities
+    # factor of 2 in pixel size matches final domain call (see domain_call)
     area_df = pd.concat([
         calculate_area(adata_xenium, args.layer_obs, layer, args.sample_col,
-                       2*args.pixel_size)  # factor of 2 to match coarsened pixel size in final domain call (see domain_call)
+                       2*args.pixel_size)
         for layer in layers
         ], axis=1)
     area_df = pd.concat([
@@ -638,26 +670,26 @@ def main() -> int:
         stacked_densities = filtered_df.set_index(['sample', 'layer']).stack()
         stacked_densities.name = 'density'
         stacked_densities = stacked_densities.to_frame().reset_index()
-        if dens_col=='subclass' and args.select_obs=='class_scanvi' and args.select_val=='IN':
+        if dens_col=='subclass_scanvi' and args.select_obs=='class_scanvi' and args.select_val=='IN':
             figname = "Figure_S4E"
-        elif dens_col=='subtype' and args.select_obs=='class_scanvi' and args.select_val=='IN':
+        elif dens_col=='subtype_scanvi' and args.select_obs=='class_scanvi' and args.select_val=='IN':
             figname = "Figure_S4F"
         else:
-            figname = f"{dens_col}Densities_select{args.select_obs}_{select_val}_by{args.layer_obs}"
+            figname = f"{dens_col}Densities_select{args.select_obs}_{args.select_val}_by{args.layer_obs}"
         plot_layer_densities(
             stacked_densities, save_path=plot_dir.joinpath(f"{figname}.pdf")
         )
         # generate Figure S24K
         # note that this portion of the code assumes everything was run as in
         # the paper (i.e. with default settings), but does not check for this
-        if dens_col == 'subtype' and args.select_obs=='class_scanvi' and args.select_val=='IN':
+        if dens_col == 'subtype_scanvi' and args.select_obs=='class_scanvi' and args.select_val=='IN':
             adata_sample = adata_samples[args.plot_sample].copy()
             sns_kwargs = dict(s=args.dot_size, linewidth=args.line_width, alpha=args.alpha)
             # generate color palette
             greys = sns.color_palette('tab20c')[-4:]
             pal = {'WM': greys[0], 'L5-6': greys[1], 'L3-5': greys[2], 'L2-3': greys[3]}
             cmap = sns.color_palette('tab10')
-            cats=[cat for cat in adata_sample.obs['scanvi_subtype'].cat.categories
+            cats=[cat for cat in adata_sample.obs['subtype_scanvi'].cat.categories
                   if cat.startswith('IN_SST')]
             for i, cat in enumerate(cats):
                 pal[cat] = cmap[i]
@@ -665,24 +697,25 @@ def main() -> int:
             fig, ax = plt.subplots()
             fig.set_size_inches((6,6))
             # plot layers
-            adata_sample.obs[layer_col] = adata_sample.obs[layer_col].cat.remove_categories(
-                [cat for cat in adata_sample.obs[layer_col].cat.categories
-                 if cat not in pal.keys()]
-            )
-            ax = spatial_plot(adata_sample, layer_col, aspect='equal',
+            mask_layers = adata_sample.obs[args.layer_obs].isin(pal.keys())
+            adata_sample.obs[args.layer_obs] = adata_sample.obs[args.layer_obs].\
+                where(mask_layers).cat.remove_unused_categories()
+            ax = spatial_plot(adata_sample, args.layer_obs, aspect='equal',
                               yticks=[], xticks=[], title='', pal=pal,
                               ax=ax, **sns_kwargs)
             # plot subtypes
-            adata_sample.obs[annot_col] = adata_sample.obs[annot_col].cat.remove_categories(
-                [cat for cat in adata_sample.obs[annot_col].cat.categories
-                 if cat not in pal.keys()]
-            )
-            ax = spatial_plot(adata_sample, annot_col, aspect='equal',
-                            yticks=[], xticks=[], title=sample, pal=pal,
-                            ax=ax, **sns_kwargs)
+            mask_subtypes = adata_sample.obs['subtype_scanvi'].isin(pal.keys())
+            adata_sample.obs['IN_SST_subtype'] = adata_sample.obs['subtype_scanvi'].\
+                where(mask_subtypes).cat.remove_unused_categories()
+            ax = spatial_plot(adata_sample, 'IN_SST_subtype', aspect='equal',
+                              yticks=[], xticks=[], title=args.plot_sample, pal=pal,
+                              ax=ax, **sns_kwargs)
             # finish up
             sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
             fig.savefig(plot_dir.joinpath("Figure_S4K.pdf"), bbox_inches='tight')
 
     return 0
-        
+
+
+if __name__ == "__main__":
+    sys.exit(main())

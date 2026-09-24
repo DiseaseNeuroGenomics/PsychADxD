@@ -399,7 +399,7 @@ def run_scanvi(ref_fl:Path | str, query_fl:Path | str, label_col:str,
         os.mkdir(out_dir)
     # load data
     adata_ref, adata_query = load_and_preprocess(
-        ref_path=ref_fl, query_path=query_fl,
+        ref_path=str(ref_fl), query_path=str(query_fl),
         label_col=label_col, batch_key=batch_key,
         hvgs=hvgs
     )
@@ -459,6 +459,17 @@ def run_scanvi(ref_fl:Path | str, query_fl:Path | str, label_col:str,
     if ret_style=='full':
         return adata_full
     if ret_style == 'query':
+        # clean up unnecessary obs and uns keys
+        adata_query.obs.drop(
+            [batch_key, label_col,
+             *[col for col in adata_query.obs.columns if col.startswith('_')]
+             ],
+            inplace=True,
+            axis=1
+            )
+        for key in list(adata_query.uns.keys()):
+            if key.startswith('_'):
+                _ = adata_query.uns.pop(key)
         return adata_query
     if ret_style == 'predictions':
         return predictions_df

@@ -22,9 +22,14 @@ def parse_dirnames(xenium_dirs:list[Path|str]):
         # https://zenodo.org/records/14606776
         name_parts = os.path.basename(dir).split('_')
         slide_id, reg_num, donor = name_parts
+        try:
+            reg_num = int(reg_num)
+        except ValueError:  # name contains something additional, like 'Region'
+            numerals = "".join([char for char in reg_num if char.isdigit()])
+            reg_num = int(numerals) if len(numerals)>0 else reg_num  # give up if this fails
         meta = pd.Series({
             'slide_id': slide_id,
-            'region_number': int(reg_num),
+            'region_number': reg_num,
             'donor': donor,
             'sample_id': f"{slide_id}_R{reg_num}_{donor}"
         })
@@ -151,25 +156,26 @@ def process_xenium(adata:sc.AnnData, min_counts:int=0, total_counts:int=1e4,
     do_cluster: if True, perform clustering using the Leiden algorithm.
     leiden_res: resolution parameter for the Leiden clustering algorithm.
     """
+    adata_temp = adata.copy()
     # filter cells based on transcript counts
-    sc.pp.filter_cells(adata, min_counts=min_counts)
+    sc.pp.filter_cells(adata_temp, min_counts=min_counts)
     # normalize and log-transform
-    sc.pp.normalize_total(adata, target_sum=total_counts)
-    sc.pp.log1p(adata)
+    sc.pp.normalize_total(adata_temp, target_sum=total_counts)
+    sc.pp.log1p(adata_temp)
     # reduce dimensionality and cluster
     if do_cluster:
-        sc.pp.pca(adata, n_pcs=n_pcs)
-        sc.pp.neighbors(adata, n_pcs=n_pcs)
-        sc.tl.umap(adata)
-        sc.tl.leiden(adata, resolution=leiden_res)
+        sc.pp.pca(adata_temp, n_pcs)
+        sc.pp.neighbors(adata_temp, n_pcs=n_pcs)
+        sc.tl.umap(adata_temp)
+        sc.tl.leiden(adata_temp, resolution=leiden_res)
     # save or return data
     if save_dir is not None:
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
         save_path = save_dir.joinpath("processed.h5ad")
-        adata.write_h5ad(save_path)
+        adata_temp.write_h5ad(save_path)
     else:
-        return adata
+        return adata_temp
 
 
 def filter_by_annot(adata:sc.AnnData, predict_col:str,
@@ -201,7 +207,7 @@ def filter_by_annot(adata:sc.AnnData, predict_col:str,
     # consistent with the cluster they belong to.
     consistent_nuclei = (
         adata.obs[annot_clust_col] ==
-        adata.obs[predict_col].cat.add_categories('Ambiguous')
+        adata.obs['class_scanvi'].cat.add_categories('Ambiguous')
     )
     if plot_dir is not None:
         plot_dir = Path(plot_dir)
@@ -255,7 +261,7 @@ def fig_s4c(adata:sc.AnnData, annot_col:str, ambig_val:str='Ambiguous',
     adata_temp.obs['filter'] = (adata_temp.obs[annot_col] == ambig_val) \
         .astype('category').cat. \
         rename_categories({True: ambig_val, False: 'Stable'})
-    ax = sc.pl.umap(adata, color=['filter'], show=False, palette=pal)
+    ax = sc.pl.umap(adata_temp, color=['filter'], show=False, palette=pal)
     ax.figure.set_size_inches(2,2)
     ax.set_title('Nuclei filtering by major cell type prediction')
     if save_dir is not None:
@@ -320,6 +326,10 @@ def arg_parser():
     parser.add_argument('--scvi_seed', type=int, default=0,
                         help="Random seed for scVI training. "
                              "Set to ensure reproducibility.")
+    parser.add_argument('--scanvi_overwrite', action='store_true',
+                            help="Whether to use saved scANVI model files"
+                                 "(False; default) if they are found, or "
+                                 "rerun scANVI and overwrite them")
     parser.add_argument('--min_transcripts', type=int, default=30,
                         help="Minimum number of transcripts for a cell to "
                              "be retained in the analysis.")
@@ -357,9 +367,11 @@ def main() -> int:
     args = parser.parse_args()
     # save directories
     if args.save_dir is None:
-        args.save_dir = args.input.joinpath("analysis")
+        args.save_dir = Path(args.input).joinpath("analysis")
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
+    scanvi_dir = save_dir.joinpath("scANVI")
+    scanvi_dir.mkdir(parents=True, exist_ok=True)
     plot_dir = save_dir.joinpath("plots")
     plot_dir.mkdir(parents=True, exist_ok=True)
     # input data
@@ -403,15 +415,16 @@ def main() -> int:
         ref_fl=args.scanvi_ref,
         query_fl=save_dir.joinpath("concatenated.h5ad"),
         label_col=args.scanvi_label,
-        out_dir=save_dir.joinpath('scANVI'),
+        out_dir=scanvi_dir.joinpath(f"all_cells__{args.scanvi_label}"),
         batch_key=args.scanvi_batch,
         scvi_n_latent=args.scvi_n_latent,
         scvi_max_epochs=args.scvi_max_epochs,
         scanvi_max_epochs=args.scanvi_max_epochs,
         scvi_seed=args.scvi_seed,
-        overwrite=True,
+        overwrite=args.scanvi_overwrite,
         ret_style='query'
     )
+    # save temporary result to file
     xenium_adata.write_h5ad(save_dir.joinpath("annotated.h5ad"))
     # generate supplementary figure 4 panel B
     fig_s4b(
