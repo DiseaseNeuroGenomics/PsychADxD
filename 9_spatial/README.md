@@ -31,6 +31,7 @@ python labelSubclass_plotSpatial.py -i "/path/to/extracted/data/"analysis/final.
 # transfer subtypes, generate Figs. S4 g, h, j
 python labelSubtype_plotSpatial.py -i "/path/to/extracted/data/"analysis/xenium_annotated_subclass.h5ad -r "/path/to/radc/h5ad"
 
+# for the layer ID and density, see the accompanying `layers.csv` file for a template layer definition file
 # automatically identify cortical domains, calculate spatial densities, make Fig. S4 e, f, k
 python layerID_densityAnalysis.py -i "/path/to/extracted/data/"analysis/xenium_annotated_subtype.h5ad -l "path/to/layer/description/csv"
 ```
